@@ -100,10 +100,18 @@ public:
         createGraphicsPipeline();
         createFramebuffers();
 
+        initImGui();
+
         mainLoop();
     }
 
     ~EvacuationEngine() {
+        if (device) {
+            device->waitIdle();
+            ImGui_ImplVulkan_Shutdown();
+            ImGui_ImplGlfw_Shutdown();
+            ImGui::DestroyContext();
+        }
         if (window != nullptr) {
             glfwDestroyWindow(window);
             glfwTerminate();
@@ -135,6 +143,7 @@ private:
     std::unique_ptr<vk::raii::Pipeline> buildGridPipeline;
     std::unique_ptr<vk::raii::Pipeline> physicsPipeline;
     std::unique_ptr<vk::raii::DescriptorPool> descriptorPool;
+    std::unique_ptr<vk::raii::DescriptorPool> imguiPool;
     std::vector<vk::raii::DescriptorSet> computeDescriptorSets;
 
     uint32_t totalCars{0};
@@ -196,7 +205,63 @@ private:
         engine->framebufferResized = true;
     }
 
-    void initWindow() {
+void initImGui() {
+        // 1. Create a massive descriptor pool specifically for ImGui
+        std::array<vk::DescriptorPoolSize, 11> poolSizes = {
+            {{vk::DescriptorType::eSampler, 1000},
+             {vk::DescriptorType::eCombinedImageSampler, 1000},
+             {vk::DescriptorType::eSampledImage, 1000},
+             {vk::DescriptorType::eStorageImage, 1000},
+             {vk::DescriptorType::eUniformTexelBuffer, 1000},
+             {vk::DescriptorType::eStorageTexelBuffer, 1000},
+             {vk::DescriptorType::eUniformBuffer, 1000},
+             {vk::DescriptorType::eStorageBuffer, 1000},
+             {vk::DescriptorType::eUniformBufferDynamic, 1000},
+             {vk::DescriptorType::eStorageBufferDynamic, 1000},
+             {vk::DescriptorType::eInputAttachment, 1000}}};
+
+        vk::DescriptorPoolCreateInfo poolInfo{
+            .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+            .maxSets = 1000,
+            .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+            .pPoolSizes = poolSizes.data()
+        };
+        imguiPool = std::make_unique<vk::raii::DescriptorPool>(*device, poolInfo);
+
+        // 2. Initialize the core ImGui context
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        ImGui::StyleColorsDark();
+
+        // 3. Initialize the GLFW and Vulkan Backends
+        ImGui_ImplGlfw_InitForVulkan(window, true);
+
+        ImGui_ImplVulkan_InitInfo init_info = {};
+        init_info.Instance = **instance;
+        init_info.PhysicalDevice = **physicalDevice;
+        init_info.Device = **device;
+        init_info.QueueFamily = queueFamilyIndex;
+        init_info.Queue = **queue;
+        init_info.PipelineCache = VK_NULL_HANDLE;
+        init_info.DescriptorPool = **imguiPool;
+        init_info.MinImageCount = 2;
+        init_info.ImageCount = static_cast<uint32_t>(swapchainImages.size());
+        init_info.Allocator = nullptr;
+        init_info.CheckVkResultFn = nullptr;
+
+        // --- THE FIX: Use the new PipelineInfoMain nested struct ---
+        init_info.PipelineInfoMain.RenderPass = **renderPass;
+        init_info.PipelineInfoMain.Subpass = 0;
+        init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+        ImGui_ImplVulkan_Init(&init_info);
+
+        // --- THE FIX: Manual font uploading is no longer required! ---
+        // ImGui now automatically uploads fonts to the GPU on the first ImGui_ImplVulkan_NewFrame() call.
+    }
+
+void initWindow() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         window = glfwCreateWindow(static_cast<int32_t>(WIDTH), static_cast<int32_t>(HEIGHT),
@@ -207,18 +272,23 @@ private:
 
         // A. SCROLL CALLBACK (ZOOM IN / OUT)
         glfwSetScrollCallback(window, [](GLFWwindow *win, double xoffset, double yoffset) {
+            // --- THE FIX: Ignore scroll if hovering over the UI ---
+            if (ImGui::GetIO().WantCaptureMouse) return;
+
             auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
             if (yoffset > 0) {
-                engine->mapBounds.zoom_level *= 1.15f; // Zoom In
+                engine->mapBounds.zoom_level *= 1.15f;
             } else {
-                engine->mapBounds.zoom_level /= 1.15f; // Zoom Out
+                engine->mapBounds.zoom_level /= 1.15f;
             }
-            // Clamp zoom level to protect against numerical precision artifacts
             engine->mapBounds.zoom_level = std::clamp(engine->mapBounds.zoom_level, 0.5f, 500.0f);
         });
 
         // B. MOUSE BUTTON CALLBACK (START / STOP DRAG)
         glfwSetMouseButtonCallback(window, [](GLFWwindow *win, int button, int action, int mods) {
+            // --- THE FIX: Ignore clicks if clicking on the UI ---
+            if (ImGui::GetIO().WantCaptureMouse) return;
+
             auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
             if (button == GLFW_MOUSE_BUTTON_LEFT) {
                 if (action == GLFW_PRESS) {
@@ -232,16 +302,15 @@ private:
 
         // C. CURSOR POSITION CALLBACK (PANNING THE MAP)
         glfwSetCursorPosCallback(window, [](GLFWwindow *win, double xpos, double ypos) {
+            // (We don't need the ImGui check here because isDragging won't be true if the press was blocked above!)
             auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
             if (engine->isDragging) {
                 double deltaX = xpos - engine->lastMouseX;
                 double deltaY = ypos - engine->lastMouseY;
 
-                // Scale panning speed based on current zoom level and canvas constraints
                 float screenFactorX = (engine->mapBounds.extent_width / static_cast<float>(engine->WIDTH));
                 float screenFactorY = (engine->mapBounds.extent_height / static_cast<float>(engine->HEIGHT));
 
-                // Invert deltaY because screen space pixels run downward, but coordinate systems run upward
                 engine->mapBounds.camera_x -= static_cast<float>(deltaX) * (
                     screenFactorX / engine->mapBounds.zoom_level);
                 engine->mapBounds.camera_y += static_cast<float>(deltaY) * (
@@ -252,8 +321,12 @@ private:
             }
         });
 
+        // D. KEYBOARD CALLBACK
         glfwSetKeyCallback(
             window, [](GLFWwindow *win, const int key, const int scancode, const int action, const int mods) {
+                // --- THE FIX: Ignore keyboard shortcuts if typing inside an ImGui text box ---
+                if (ImGui::GetIO().WantCaptureKeyboard) return;
+
                 auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
                 if (action == GLFW_PRESS) {
                     if (key == GLFW_KEY_SPACE) {
@@ -756,7 +829,7 @@ private:
         streetPipeline = std::make_unique<vk::raii::Pipeline>(*device, nullptr, streetPipelineInfo);
     }
 
-    void mainLoop() {
+void mainLoop() {
         const vk::CommandBufferAllocateInfo cmdAllocInfo{
             .commandPool = **commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
         };
@@ -793,6 +866,31 @@ private:
                 continue; // Restart the loop immediately with the new valid swapchain
             }
 
+            // --- 1. START IMGUI FRAME ---
+            ImGui_ImplVulkan_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+
+            // --- 2. BUILD YOUR UI ---
+            ImGui::Begin("Simulation Control Panel");
+            ImGui::Text("Performance: %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+            ImGui::Separator();
+
+            if (ImGui::Button(isPaused ? "▶ Resume Simulation" : "⏸ Pause Simulation")) {
+                isPaused = !isPaused;
+            }
+
+            ImGui::SliderInt("Simulation Speed", &simSpeed, 1, 64, "%d x");
+
+            ImGui::Separator();
+            ImGui::Text("Total Cars: %u", totalCars);
+            ImGui::Text("Total Streets: %u", totalEdges);
+            ImGui::End();
+
+            // --- 3. FINALIZE UI DATA ---
+            ImGui::Render();
+
+            // --- VULKAN COMMAND RECORDING ---
             constexpr vk::CommandBufferBeginInfo cmdBeginInfo{
                 .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
             };
@@ -851,7 +949,10 @@ private:
             };
             cmd.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
 
-            // --- NEW: INJECT DYNAMIC VIEWPORT & SCISSOR ---
+            // --- THE FIX: Bind the graphics pipeline and push camera constants FIRST ---
+            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **streetPipeline);
+
+            // Set Dynamic Viewport & Scissor
             const vk::Viewport dynamicViewport{
                 .x = 0.0f, .y = 0.0f, .width = static_cast<float>(swapchainExtent.width),
                 .height = static_cast<float>(swapchainExtent.height), .minDepth = 0.0f, .maxDepth = 1.0f
@@ -860,16 +961,22 @@ private:
             const vk::Rect2D dynamicScissor{.offset = {0, 0}, .extent = swapchainExtent};
             cmd.setScissor(0, dynamicScissor);
 
+            // Push the Camera Data (This only affects your pipelines, not ImGui!)
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, **graphicsPipelineLayout, 0,
                                    {*computeDescriptorSets[0]}, nullptr);
             cmd.pushConstants<GraphicsPushData>(**graphicsPipelineLayout, vk::ShaderStageFlagBits::eAllGraphics, 0,
                                                 mapBounds);
 
-            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **streetPipeline);
+            // Draw the Map
             cmd.draw(2, totalEdges, 0, 0);
 
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **graphicsPipeline);
             cmd.draw(6, totalCars, 0, 0);
+
+            // --- 4. DRAW IMGUI ON TOP OF THE MAP ---
+            // ImGui uses its OWN internal pipeline and push constants.
+            // By calling it LAST, it ignores the mapBounds we pushed above!
+            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *cmd);
 
             cmd.endRenderPass();
             cmd.end();
@@ -903,7 +1010,7 @@ private:
             queue->waitIdle();
         }
 
-        // --- NEW: THE SHUTDOWN FIX ---
+        // --- THE SHUTDOWN FIX ---
         // Force the CPU to wait until the GPU is completely finished drawing the last frame
         // BEFORE destroying the objects
         device->waitIdle();
