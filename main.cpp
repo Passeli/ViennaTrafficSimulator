@@ -50,14 +50,14 @@ struct PushData {
 
 // ADDED: aspect_ratio to prevent cars from stretching when the window resizes!
 struct GraphicsPushData {
-    float min_x{};
-    float max_x{};
-    float min_y{};
-    float max_y{};
+    float camera_x{};
+    float camera_y{};
+    float zoom_level{1.0f};
     float aspect_ratio{};
+    float extent_width{}; // Bounding box size of the city in meters
+    float extent_height{};
     float padding1{};
     float padding2{};
-    float padding3{};
 };
 
 template<typename T>
@@ -158,6 +158,11 @@ private:
     int32_t simSpeed{1};
     bool framebufferResized{false};
 
+    // --- CAMERA INTERACTION STATE ---
+    bool isDragging{false};
+    double lastMouseX{0.0};
+    double lastMouseY{0.0};
+
     // --- RECREATION LOGIC ---
     void recreateSwapchain() {
         int width = 0, height = 0;
@@ -195,7 +200,54 @@ private:
                                   "Vienna Evacuation Simulator", nullptr, nullptr);
 
         glfwSetWindowUserPointer(window, this);
-        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback); // Listen for resizes
+        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+
+        // A. SCROLL CALLBACK (ZOOM IN / OUT)
+        glfwSetScrollCallback(window, [](GLFWwindow *win, double xoffset, double yoffset) {
+            auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
+            if (yoffset > 0) {
+                engine->mapBounds.zoom_level *= 1.15f; // Zoom In
+            } else {
+                engine->mapBounds.zoom_level /= 1.15f; // Zoom Out
+            }
+            // Clamp zoom level to protect against numerical precision artifacts
+            engine->mapBounds.zoom_level = std::clamp(engine->mapBounds.zoom_level, 0.5f, 500.0f);
+        });
+
+        // B. MOUSE BUTTON CALLBACK (START / STOP DRAG)
+        glfwSetMouseButtonCallback(window, [](GLFWwindow *win, int button, int action, int mods) {
+            auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
+            if (button == GLFW_MOUSE_BUTTON_LEFT) {
+                if (action == GLFW_PRESS) {
+                    engine->isDragging = true;
+                    glfwGetCursorPos(win, &engine->lastMouseX, &engine->lastMouseY);
+                } else if (action == GLFW_RELEASE) {
+                    engine->isDragging = false;
+                }
+            }
+        });
+
+        // C. CURSOR POSITION CALLBACK (PANNING THE MAP)
+        glfwSetCursorPosCallback(window, [](GLFWwindow *win, double xpos, double ypos) {
+            auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
+            if (engine->isDragging) {
+                double deltaX = xpos - engine->lastMouseX;
+                double deltaY = ypos - engine->lastMouseY;
+
+                // Scale panning speed based on current zoom level and canvas constraints
+                float screenFactorX = (engine->mapBounds.extent_width / static_cast<float>(engine->WIDTH));
+                float screenFactorY = (engine->mapBounds.extent_height / static_cast<float>(engine->HEIGHT));
+
+                // Invert deltaY because screen space pixels run downward, but coordinate systems run upward
+                engine->mapBounds.camera_x -= static_cast<float>(deltaX) * (
+                    screenFactorX / engine->mapBounds.zoom_level);
+                engine->mapBounds.camera_y += static_cast<float>(deltaY) * (
+                    screenFactorY / engine->mapBounds.zoom_level);
+
+                engine->lastMouseX = xpos;
+                engine->lastMouseY = ypos;
+            }
+        });
 
         glfwSetKeyCallback(
             window, [](GLFWwindow *win, const int key, const int scancode, const int action, const int mods) {
@@ -367,14 +419,28 @@ private:
         uploadVectorToGPU(rawEdges, edgeBuffer, edgeMemory);
         uploadVectorToGPU(rawCars, carBuffer, carMemory);
 
-        mapBounds = {100000000.0f, -100000000.0f, 100000000.0f, -100000000.0f};
+        // --- 1. Find the boundaries using local variables ---
+        float temp_min_x = 100000000.0f;
+        float temp_max_x = -100000000.0f;
+        float temp_min_y = 100000000.0f;
+        float temp_max_y = -100000000.0f;
+
         for (const auto &n: nodes) {
-            if (n.x < mapBounds.min_x) mapBounds.min_x = n.x;
-            if (n.x > mapBounds.max_x) mapBounds.max_x = n.x;
-            if (n.y < mapBounds.min_y) mapBounds.min_y = n.y;
-            if (n.y > mapBounds.max_y) mapBounds.max_y = n.y;
+            if (n.x < temp_min_x) temp_min_x = n.x;
+            if (n.x > temp_max_x) temp_max_x = n.x;
+            if (n.y < temp_min_y) temp_min_y = n.y;
+            if (n.y > temp_max_y) temp_max_y = n.y;
         }
-        // Initialize Aspect Ratio
+
+        // --- 2. Setup the Camera (mapBounds) ---
+        float width_meters = temp_max_x - temp_min_x;
+        float height_meters = temp_max_y - temp_min_y;
+
+        mapBounds.camera_x = temp_min_x + (width_meters * 0.5f);
+        mapBounds.camera_y = temp_min_y + (height_meters * 0.5f);
+        mapBounds.zoom_level = 1.0f;
+        mapBounds.extent_width = width_meters;
+        mapBounds.extent_height = height_meters;
         mapBounds.aspect_ratio = static_cast<float>(WIDTH) / static_cast<float>(HEIGHT);
     }
 

@@ -32,14 +32,10 @@ struct Car {
 [[vk::binding(2, 0)]] RWStructuredBuffer<Car> cars;
 
 struct GraphicsPushData {
-    float min_x;
-    float max_x;
-    float min_y;
-    float max_y;
-    float aspect_ratio;
-    float p1;
-    float p2;
-    float p3; // <-- ADDED
+    float camera_x; float camera_y;
+    float zoom_level; float aspect_ratio;
+    float extent_width; float extent_height;
+    float p1; float p2;
 };
 [[vk::push_constant]] ConstantBuffer<GraphicsPushData> pc;
 
@@ -74,9 +70,17 @@ VertexOutput vertexMain(uint vertexID : SV_VertexID, uint instanceID : SV_Instan
     float car_x = lerp(start_node.x, end_node.x, t);
     float car_y = lerp(start_node.y, end_node.y, t);
 
-    // Convert to Screen Coordinates (NDC)
-    float nx = ((car_x - pc.min_x) / (pc.max_x - pc.min_x)) * 2.0 - 1.0;
-    float ny = ((car_y - pc.min_y) / (pc.max_y - pc.min_y)) * 2.0 - 1.0;
+    // 1. Shift coordinate relative to camera position (Pan)
+    float local_x = car_x - pc.camera_x;
+    float local_y = car_y - pc.camera_y;
+
+    // 2. Scale coordinate based on viewport dimension boundaries (Zoom)
+    // We scale relative to the bounding width of Vienna
+    float nx = (local_x * pc.zoom_level) / (pc.extent_width * 0.5);
+    float ny = (local_y * pc.zoom_level) / (pc.extent_height * 0.5);
+
+    // Apply aspect ratio correction to prevent non-square distortion
+    nx /= pc.aspect_ratio;
 
     // --- SIMPLIFIED COLOR LOGIC ---
     // 0 = Green (Driving), 1 = Red (Queuing)

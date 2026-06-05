@@ -4,8 +4,16 @@ struct Edge { int start_node_idx; int end_node_idx; int next_edge_idx; float len
 [[vk::binding(0, 0)]] RWStructuredBuffer<Node> nodes;
 [[vk::binding(1, 0)]] RWStructuredBuffer<Edge> edges;
 
+// --- MATCHED TO C++ EXACTLY ---
 struct GraphicsPushData {
-    float min_x; float max_x; float min_y; float max_y;
+    float camera_x;
+    float camera_y;
+    float zoom_level;
+    float aspect_ratio;
+    float extent_width;
+    float extent_height;
+    float p1;
+    float p2;
 };
 [[vk::push_constant]] ConstantBuffer<GraphicsPushData> pc;
 
@@ -20,10 +28,19 @@ VertexOutput vertexMain(uint vertexID : SV_VertexID, uint instanceID : SV_Instan
     // vertexID 0 gets the start node, vertexID 1 gets the end node
     Node n = (vertexID == 0) ? nodes[edge.start_node_idx] : nodes[edge.end_node_idx];
 
-    float nx = ((n.x - pc.min_x) / (pc.max_x - pc.min_x)) * 2.0 - 1.0;
-    float ny = ((n.y - pc.min_y) / (pc.max_y - pc.min_y)) * 2.0 - 1.0;
+    // 1. Shift coordinate relative to camera position (Pan)
+    float local_x = n.x - pc.camera_x;
+    float local_y = n.y - pc.camera_y;
+
+    // 2. Scale coordinate based on viewport dimensions (Zoom)
+    float nx = (local_x * pc.zoom_level) / (pc.extent_width * 0.5);
+    float ny = (local_y * pc.zoom_level) / (pc.extent_height * 0.5);
+
+    // 3. Apply aspect ratio correction
+    nx /= pc.aspect_ratio;
 
     VertexOutput output;
+    // -ny inverts the Y axis so North is UP
     output.position = float4(nx, -ny, 0.0, 1.0);
     return output;
 }
