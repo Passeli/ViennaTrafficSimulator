@@ -69,20 +69,25 @@ void main(uint3 threadId : SV_DispatchThreadID) {
             if ((uint)current_search_id != id) {
                 Car other_car = cars[current_search_id];
 
-                // We must check cars that are driving (0) AND waiting at the intersection (1)
-                if (other_car.state == 0 || other_car.state == 1) {
-                    float dist_to_other_front = other_car.position - car.position;
+                // Ensure the car hasn't secretly moved to a new edge this frame!
+                if (other_car.current_edge_idx == car.current_edge_idx) {
+                    if (other_car.state == 0 || other_car.state == 1) {
+                        float dist_to_other_front = other_car.position - car.position;
 
-                    // If the car is physically in front of us
-                    if (dist_to_other_front > 0.0) {
-                        // Calculate gap from our front bumper to their rear bumper
-                        float true_gap = dist_to_other_front - CAR_LENGTH;
+                        // --- FIX 1: THE TIE BREAKER ---
+                        // If cars do manage to perfectly overlap, mathematically force one to be "in front"
+                        // so they don't ignore each other!
+                        if (dist_to_other_front > 0.0 || (dist_to_other_front == 0.0 && (uint)current_search_id > id)) {
 
-                        // Keep track of the closest vehicle directly in front of us
-                        if (true_gap < front_distance) {
-                            front_distance = true_gap;
-                            front_speed = other_car.speed;
-                            is_lead_car = false;
+                            // Calculate gap from our front bumper to their rear bumper
+                            float true_gap = dist_to_other_front - CAR_LENGTH;
+
+                            // Keep track of the closest vehicle directly in front of us
+                            if (true_gap < front_distance) {
+                                front_distance = true_gap;
+                                front_speed = other_car.speed;
+                                is_lead_car = false;
+                            }
                         }
                     }
                 }
@@ -95,13 +100,12 @@ void main(uint3 threadId : SV_DispatchThreadID) {
         float safe_dist = target_gap + (car.speed * TIME_GAP);
 
         // --- SENSOR LOOP TRAP (Lead Car Only) ---
-        // If we are the lead car, trigger the state change 0.1m before the line
         if (is_lead_car && (car.position + 0.1 >= edge.length)) {
             car.position = edge.length; // Snap perfectly to the stop line
             car.speed = 0.0;
-            car.state = 1; // Hand over control to the intersection scheduler
+            car.state = 1; // Turn RED and request intersection lock
         } else {
-            // Intelligent Driver Model (IDM) Mathematical Simulation
+            // Intelligent Driver Model (IDM)
             float accel = 0.0;
             if (front_distance < safe_dist) {
                 float speed_diff = car.speed - front_speed;
@@ -111,12 +115,17 @@ void main(uint3 threadId : SV_DispatchThreadID) {
                 accel = 2.0 * (1.0 - pow(speed_ratio, 4.0));
             }
 
-            // Apply realistic structural acceleration and kinematic limits
             accel = clamp(accel, -5.0, 3.0);
-
-            // Euler Integration
             car.speed = max(0.0, car.speed + accel * pc.dt);
-            car.position += car.speed * pc.dt;
+
+            // --- FIX 2: THE ANTI-TUNNELING CLAMP ---
+            float intended_movement = car.speed * pc.dt;
+
+            // Mathematically prevent the car from moving past the bumper of the car in front of it!
+            // We leave a 0.01m micro-gap to prevent true 0.0 overlapping floats.
+            float max_allowed_movement = max(0.0, front_distance - 0.01);
+
+            car.position += min(intended_movement, max_allowed_movement);
         }
     }
 
