@@ -175,6 +175,22 @@ private:
     double lastMouseX{0.0};
     double lastMouseY{0.0};
 
+    // --- CPU SHADOW COPIES ---
+    std::vector<GPU_Car> cpuCars;
+    std::vector<GPU_Edge> cpuEdges;
+    std::vector<GPU_Node> cpuNodes;
+
+    // --- READBACK BUFFERS (Host Visible) ---
+    std::unique_ptr<vk::raii::Buffer> carReadbackBuffer;
+    std::unique_ptr<vk::raii::DeviceMemory> carReadbackMemory;
+    std::unique_ptr<vk::raii::Buffer> edgeReadbackBuffer;
+    std::unique_ptr<vk::raii::DeviceMemory> edgeReadbackMemory;
+    std::unique_ptr<vk::raii::Buffer> nodeReadbackBuffer;
+    std::unique_ptr<vk::raii::DeviceMemory> nodeReadbackMemory;
+
+    // --- UI STATE ---
+    int selectedCarId = 0;
+
     // --- RECREATION LOGIC ---
     void recreateSwapchain() {
         int width = 0, height = 0;
@@ -205,20 +221,23 @@ private:
         engine->framebufferResized = true;
     }
 
-void initImGui() {
+    void initImGui() {
         // 1. Create a massive descriptor pool specifically for ImGui
         std::array<vk::DescriptorPoolSize, 11> poolSizes = {
-            {{vk::DescriptorType::eSampler, 1000},
-             {vk::DescriptorType::eCombinedImageSampler, 1000},
-             {vk::DescriptorType::eSampledImage, 1000},
-             {vk::DescriptorType::eStorageImage, 1000},
-             {vk::DescriptorType::eUniformTexelBuffer, 1000},
-             {vk::DescriptorType::eStorageTexelBuffer, 1000},
-             {vk::DescriptorType::eUniformBuffer, 1000},
-             {vk::DescriptorType::eStorageBuffer, 1000},
-             {vk::DescriptorType::eUniformBufferDynamic, 1000},
-             {vk::DescriptorType::eStorageBufferDynamic, 1000},
-             {vk::DescriptorType::eInputAttachment, 1000}}};
+            {
+                {vk::DescriptorType::eSampler, 1000},
+                {vk::DescriptorType::eCombinedImageSampler, 1000},
+                {vk::DescriptorType::eSampledImage, 1000},
+                {vk::DescriptorType::eStorageImage, 1000},
+                {vk::DescriptorType::eUniformTexelBuffer, 1000},
+                {vk::DescriptorType::eStorageTexelBuffer, 1000},
+                {vk::DescriptorType::eUniformBuffer, 1000},
+                {vk::DescriptorType::eStorageBuffer, 1000},
+                {vk::DescriptorType::eUniformBufferDynamic, 1000},
+                {vk::DescriptorType::eStorageBufferDynamic, 1000},
+                {vk::DescriptorType::eInputAttachment, 1000}
+            }
+        };
 
         vk::DescriptorPoolCreateInfo poolInfo{
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
@@ -231,7 +250,8 @@ void initImGui() {
         // 2. Initialize the core ImGui context
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        ImGuiIO &io = ImGui::GetIO();
+        (void) io;
         ImGui::StyleColorsDark();
 
         // 3. Initialize the GLFW and Vulkan Backends
@@ -261,7 +281,7 @@ void initImGui() {
         // ImGui now automatically uploads fonts to the GPU on the first ImGui_ImplVulkan_NewFrame() call.
     }
 
-void initWindow() {
+    void initWindow() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         window = glfwCreateWindow(static_cast<int32_t>(WIDTH), static_cast<int32_t>(HEIGHT),
@@ -284,12 +304,13 @@ void initWindow() {
             engine->mapBounds.zoom_level = std::clamp(engine->mapBounds.zoom_level, 0.5f, 500.0f);
         });
 
-        // B. MOUSE BUTTON CALLBACK (START / STOP DRAG)
+        // B. MOUSE BUTTON CALLBACK (START / STOP DRAG & PICKING)
         glfwSetMouseButtonCallback(window, [](GLFWwindow *win, int button, int action, int mods) {
-            // --- THE FIX: Ignore clicks if clicking on the UI ---
             if (ImGui::GetIO().WantCaptureMouse) return;
 
             auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
+
+            // Left Click = Pan the Map
             if (button == GLFW_MOUSE_BUTTON_LEFT) {
                 if (action == GLFW_PRESS) {
                     engine->isDragging = true;
@@ -297,6 +318,16 @@ void initWindow() {
                 } else if (action == GLFW_RELEASE) {
                     engine->isDragging = false;
                 }
+            }
+
+            // Right Click = Inspect Car
+            if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
+                double mouseX, mouseY;
+                glfwGetCursorPos(win, &mouseX, &mouseY);
+
+                float worldX, worldY;
+                engine->screenToWorld(mouseX, mouseY, worldX, worldY);
+                engine->selectClosestCar(worldX, worldY);
             }
         });
 
@@ -518,6 +549,25 @@ void initWindow() {
         mapBounds.extent_width = width_meters;
         mapBounds.extent_height = height_meters;
         mapBounds.aspect_ratio = static_cast<float>(WIDTH) / static_cast<float>(HEIGHT);
+
+        // Initialize CPU vectors to hold the data
+        cpuCars.resize(totalCars);
+        cpuEdges.resize(totalEdges);
+        cpuNodes.resize(nodes.size());
+
+        // Create Readback Buffers (Host Visible + Coherent so the CPU can read them)
+        auto createReadback = [&](vk::DeviceSize size, std::unique_ptr<vk::raii::Buffer> &buf,
+                                  std::unique_ptr<vk::raii::DeviceMemory> &mem) {
+            auto [b, m] = createBuffer(size, vk::BufferUsageFlagBits::eTransferDst,
+                                       vk::MemoryPropertyFlagBits::eHostVisible |
+                                       vk::MemoryPropertyFlagBits::eHostCoherent);
+            buf = std::move(b);
+            mem = std::move(m);
+        };
+
+        createReadback(sizeof(GPU_Car) * totalCars, carReadbackBuffer, carReadbackMemory);
+        createReadback(sizeof(GPU_Edge) * totalEdges, edgeReadbackBuffer, edgeReadbackMemory);
+        createReadback(sizeof(GPU_Node) * nodes.size(), nodeReadbackBuffer, nodeReadbackMemory);
     }
 
     void createComputePipeline() {
@@ -829,7 +879,7 @@ void initWindow() {
         streetPipeline = std::make_unique<vk::raii::Pipeline>(*device, nullptr, streetPipelineInfo);
     }
 
-void mainLoop() {
+    void mainLoop() {
         const vk::CommandBufferAllocateInfo cmdAllocInfo{
             .commandPool = **commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
         };
@@ -873,18 +923,65 @@ void mainLoop() {
 
             // --- 2. BUILD YOUR UI ---
             ImGui::Begin("Simulation Control Panel");
-            ImGui::Text("Performance: %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+            ImGui::Text("Performance: %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate,
+                        ImGui::GetIO().Framerate);
             ImGui::Separator();
 
             if (ImGui::Button(isPaused ? "▶ Resume Simulation" : "⏸ Pause Simulation")) {
                 isPaused = !isPaused;
             }
-
             ImGui::SliderInt("Simulation Speed", &simSpeed, 1, 64, "%d x");
 
+            // ==========================================
+            // --- NEW: THE DATA INSPECTOR ---
+            // ==========================================
             ImGui::Separator();
-            ImGui::Text("Total Cars: %u", totalCars);
-            ImGui::Text("Total Streets: %u", totalEdges);
+            ImGui::Text("GPU Memory Inspector");
+
+            if (ImGui::Button("📸 Download GPU Snapshot")) {
+                takeSnapshot(); // Pulls the data from VRAM!
+            }
+
+            if (!cpuCars.empty()) {
+                ImGui::Spacing();
+                // Allow the user to type in a Car ID to inspect
+                ImGui::InputInt("Inspect Car ID", &selectedCarId);
+                selectedCarId = std::clamp(selectedCarId, 0, (int) totalCars - 1);
+
+                GPU_Car &car = cpuCars[selectedCarId];
+
+                ImGui::BeginChild("CarData", ImVec2(0, 150), true);
+                ImGui::Text("--- CAR %d ---", selectedCarId);
+
+                const char *stateStr = "Unknown";
+                if (car.state == 0) stateStr = "Driving";
+                if (car.state == 1) stateStr = "Queuing at Intersection";
+                if (car.state == 2) stateStr = "Evacuated!";
+                if (car.state == 3) stateStr = "In Garage";
+
+                ImGui::Text("State: %s (%d)", stateStr, car.state);
+                ImGui::Text("Speed: %.2f m/s (%.1f km/h)", car.speed, car.speed * 3.6f);
+                ImGui::Text("Position: %.2f meters", car.position);
+                ImGui::Text("Current Edge ID: %d", car.current_edge_idx);
+                ImGui::Text("Next Car in Linked List: %d", car.next_car_idx);
+                ImGui::EndChild();
+
+                // If the car is on an edge, show the edge data too!
+                if (car.current_edge_idx != -1) {
+                    GPU_Edge &edge = cpuEdges[car.current_edge_idx];
+                    ImGui::BeginChild("EdgeData", ImVec2(0, 120), true);
+                    ImGui::Text("--- EDGE %d ---", car.current_edge_idx);
+                    ImGui::Text("Length: %.2f meters", edge.length);
+                    ImGui::Text("Max Speed: %.1f km/h", edge.max_speed * 3.6f);
+                    ImGui::Text("Head Car ID: %d", edge.head_car_idx);
+                    ImGui::Text("Target Node ID: %d", edge.end_node_idx);
+                    ImGui::EndChild();
+
+                    // Show the node data (Intersection Lock)
+                    GPU_Node &node = cpuNodes[edge.end_node_idx];
+                    ImGui::Text("Target Node Lock: %d", node.lock);
+                }
+            }
             ImGui::End();
 
             // --- 3. FINALIZE UI DATA ---
@@ -1014,6 +1111,105 @@ void mainLoop() {
         // Force the CPU to wait until the GPU is completely finished drawing the last frame
         // BEFORE destroying the objects
         device->waitIdle();
+    }
+
+    void takeSnapshot() {
+        // 1. Record the copy commands
+        const vk::CommandBufferAllocateInfo allocInfo{
+            .commandPool = **commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
+        };
+        const vk::raii::CommandBuffers cmdBuffers{*device, allocInfo};
+        const vk::raii::CommandBuffer &cmd = cmdBuffers.front();
+
+        cmd.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+
+        vk::BufferCopy carCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Car) * totalCars};
+        cmd.copyBuffer(**carBuffer, **carReadbackBuffer, carCopy);
+
+        vk::BufferCopy edgeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Edge) * totalEdges};
+        cmd.copyBuffer(**edgeBuffer, **edgeReadbackBuffer, edgeCopy);
+
+        vk::BufferCopy nodeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Node) * cpuNodes.size()};
+        cmd.copyBuffer(**nodeBuffer, **nodeReadbackBuffer, nodeCopy);
+
+        cmd.end();
+
+        // 2. Submit and wait for the GPU to finish copying
+        queue->submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &(*cmd)}, nullptr);
+        queue->waitIdle();
+
+        // 3. Map the memory and copy it into our C++ vectors
+        void *mappedCars = carReadbackMemory->mapMemory(0, sizeof(GPU_Car) * totalCars);
+        std::memcpy(cpuCars.data(), mappedCars, sizeof(GPU_Car) * totalCars);
+        carReadbackMemory->unmapMemory();
+
+        void *mappedEdges = edgeReadbackMemory->mapMemory(0, sizeof(GPU_Edge) * totalEdges);
+        std::memcpy(cpuEdges.data(), mappedEdges, sizeof(GPU_Edge) * totalEdges);
+        edgeReadbackMemory->unmapMemory();
+
+        void *mappedNodes = nodeReadbackMemory->mapMemory(0, sizeof(GPU_Node) * cpuNodes.size());
+        std::memcpy(cpuNodes.data(), mappedNodes, sizeof(GPU_Node) * cpuNodes.size());
+        nodeReadbackMemory->unmapMemory();
+
+        std::println("Snapshot downloaded from VRAM to RAM!");
+    }
+
+    // Converts raw GLFW window pixels into Vienna World Coordinates (Meters)
+    void screenToWorld(double screenX, double screenY, float &outWorldX, float &outWorldY) {
+        // 1. Convert Screen Pixels to Normalized Device Coordinates (NDC: -1.0 to 1.0)
+        float ndcX = (static_cast<float>(screenX) / static_cast<float>(WIDTH)) * 2.0f - 1.0f;
+        // Vulkan's Y axis points down, but our world map points up, so we invert Y
+        float ndcY = -((static_cast<float>(screenY) / static_cast<float>(HEIGHT)) * 2.0f - 1.0f);
+
+        // 2. Reverse the Aspect Ratio correction
+        ndcX *= mapBounds.aspect_ratio;
+
+        // 3. Reverse the Zoom and Extent scaling
+        float localX = (ndcX * (mapBounds.extent_width * 0.5f)) / mapBounds.zoom_level;
+        float localY = (ndcY * (mapBounds.extent_height * 0.5f)) / mapBounds.zoom_level;
+
+        // 4. Reverse the Camera Pan
+        outWorldX = localX + mapBounds.camera_x;
+        outWorldY = localY + mapBounds.camera_y;
+    }
+
+    void selectClosestCar(float worldX, float worldY) {
+        if (cpuCars.empty()) return; // Must take a snapshot first!
+
+        float closestDistSq = std::numeric_limits<float>::max();
+        int bestCarId = -1;
+
+        for (size_t i = 0; i < cpuCars.size(); ++i) {
+            const GPU_Car &car = cpuCars[i];
+
+            // Only select cars that are actually on the road
+            if (car.state >= 2 || car.current_edge_idx == -1) continue;
+
+            const GPU_Edge &edge = cpuEdges[car.current_edge_idx];
+            const GPU_Node &startNode = cpuNodes[edge.start_node_idx];
+            const GPU_Node &endNode = cpuNodes[edge.end_node_idx];
+
+            // Interpolate car's world position along the edge
+            float t = (edge.length > 0.0f) ? (car.position / edge.length) : 0.0f;
+            float carWorldX = startNode.x + t * (endNode.x - startNode.x);
+            float carWorldY = startNode.y + t * (endNode.y - startNode.y);
+
+            // Calculate distance squared to the mouse click
+            float dx = carWorldX - worldX;
+            float dy = carWorldY - worldY;
+            float distSq = (dx * dx) + (dy * dy);
+
+            if (distSq < closestDistSq) {
+                closestDistSq = distSq;
+                bestCarId = static_cast<int>(i);
+            }
+        }
+
+        // If we clicked reasonably close to a car (e.g., within 20 meters), select it!
+        if (bestCarId != -1 && closestDistSq < 400.0f) {
+            selectedCarId = bestCarId;
+            std::println("Selected Car ID: {}", selectedCarId);
+        }
     }
 };
 
