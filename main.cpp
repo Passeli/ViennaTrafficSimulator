@@ -250,7 +250,7 @@ private:
         // 2. Initialize the core ImGui context
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
-        ImGuiIO &io = ImGui::GetIO();
+        const ImGuiIO &io = ImGui::GetIO();
         (void) io;
         ImGui::StyleColorsDark();
 
@@ -284,6 +284,7 @@ private:
     void initWindow() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
         window = glfwCreateWindow(static_cast<int32_t>(WIDTH), static_cast<int32_t>(HEIGHT),
                                   "Vienna Evacuation Simulator", nullptr, nullptr);
 
@@ -291,7 +292,7 @@ private:
         glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 
         // A. SCROLL CALLBACK (ZOOM IN / OUT)
-        glfwSetScrollCallback(window, [](GLFWwindow *win, double xoffset, double yoffset) {
+        glfwSetScrollCallback(window, [](GLFWwindow *win, double xoffset, const double yoffset) {
             // --- THE FIX: Ignore scroll if hovering over the UI ---
             if (ImGui::GetIO().WantCaptureMouse) return;
 
@@ -305,7 +306,7 @@ private:
         });
 
         // B. MOUSE BUTTON CALLBACK (START / STOP DRAG & PICKING)
-        glfwSetMouseButtonCallback(window, [](GLFWwindow *win, int button, int action, int mods) {
+        glfwSetMouseButtonCallback(window, [](GLFWwindow *win, const int button, const int action, int mods) {
             if (ImGui::GetIO().WantCaptureMouse) return;
 
             auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
@@ -332,15 +333,15 @@ private:
         });
 
         // C. CURSOR POSITION CALLBACK (PANNING THE MAP)
-        glfwSetCursorPosCallback(window, [](GLFWwindow *win, double xpos, double ypos) {
+        glfwSetCursorPosCallback(window, [](GLFWwindow *win, const double xpos, const double ypos) {
             // (We don't need the ImGui check here because isDragging won't be true if the press was blocked above!)
             auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
             if (engine->isDragging) {
-                double deltaX = xpos - engine->lastMouseX;
-                double deltaY = ypos - engine->lastMouseY;
+                const double deltaX = xpos - engine->lastMouseX;
+                const double deltaY = ypos - engine->lastMouseY;
 
-                float screenFactorX = (engine->mapBounds.extent_width / static_cast<float>(engine->WIDTH));
-                float screenFactorY = (engine->mapBounds.extent_height / static_cast<float>(engine->HEIGHT));
+                const float screenFactorX = (engine->mapBounds.extent_width / static_cast<float>(engine->WIDTH));
+                const float screenFactorY = (engine->mapBounds.extent_height / static_cast<float>(engine->HEIGHT));
 
                 engine->mapBounds.camera_x -= static_cast<float>(deltaX) * (
                     screenFactorX / engine->mapBounds.zoom_level);
@@ -556,7 +557,7 @@ private:
         cpuNodes.resize(nodes.size());
 
         // Create Readback Buffers (Host Visible + Coherent so the CPU can read them)
-        auto createReadback = [&](vk::DeviceSize size, std::unique_ptr<vk::raii::Buffer> &buf,
+        auto createReadback = [&](const vk::DeviceSize size, std::unique_ptr<vk::raii::Buffer> &buf,
                                   std::unique_ptr<vk::raii::DeviceMemory> &mem) {
             auto [b, m] = createBuffer(size, vk::BufferUsageFlagBits::eTransferDst,
                                        vk::MemoryPropertyFlagBits::eHostVisible |
@@ -811,7 +812,7 @@ private:
         };
 
         // Viewports are now ignored at build time due to dynamic state, but struct must exist
-        const vk::PipelineViewportStateCreateInfo viewportState{.viewportCount = 1, .scissorCount = 1};
+        constexpr vk::PipelineViewportStateCreateInfo viewportState{.viewportCount = 1, .scissorCount = 1};
 
         constexpr vk::PipelineRasterizationStateCreateInfo rasterizer{
             .polygonMode = vk::PolygonMode::eFill, .cullMode = vk::CullModeFlagBits::eNone, .lineWidth = 1.0f
@@ -927,7 +928,7 @@ private:
                         ImGui::GetIO().Framerate);
             ImGui::Separator();
 
-            if (ImGui::Button(isPaused ? "▶ Resume Simulation" : "⏸ Pause Simulation")) {
+            if (ImGui::Button(isPaused ? "Resume Simulation" : "Pause Simulation")) {
                 isPaused = !isPaused;
             }
             ImGui::SliderInt("Simulation Speed", &simSpeed, 1, 64, "%d x");
@@ -938,7 +939,7 @@ private:
             ImGui::Separator();
             ImGui::Text("GPU Memory Inspector");
 
-            if (ImGui::Button("📸 Download GPU Snapshot")) {
+            if (ImGui::Button("Download GPU Snapshot")) {
                 takeSnapshot(); // Pulls the data from VRAM!
             }
 
@@ -946,7 +947,7 @@ private:
                 ImGui::Spacing();
                 // Allow the user to type in a Car ID to inspect
                 ImGui::InputInt("Inspect Car ID", &selectedCarId);
-                selectedCarId = std::clamp(selectedCarId, 0, (int) totalCars - 1);
+                selectedCarId = std::clamp(selectedCarId, 0, static_cast<int>(totalCars) - 1);
 
                 GPU_Car &car = cpuCars[selectedCarId];
 
@@ -1155,7 +1156,7 @@ private:
     }
 
     // Converts raw GLFW window pixels into Vienna World Coordinates (Meters)
-    void screenToWorld(double screenX, double screenY, float &outWorldX, float &outWorldY) {
+    void screenToWorld(const double screenX, const double screenY, float &outWorldX, float &outWorldY) const {
         // 1. Convert Screen Pixels to Normalized Device Coordinates (NDC: -1.0 to 1.0)
         float ndcX = (static_cast<float>(screenX) / static_cast<float>(WIDTH)) * 2.0f - 1.0f;
         // Vulkan's Y axis points down, but our world map points up, so we invert Y
@@ -1173,7 +1174,7 @@ private:
         outWorldY = localY + mapBounds.camera_y;
     }
 
-    void selectClosestCar(float worldX, float worldY) {
+    void selectClosestCar(const float worldX, const float worldY) {
         if (cpuCars.empty()) return; // Must take a snapshot first!
 
         float closestDistSq = std::numeric_limits<float>::max();
