@@ -1350,7 +1350,8 @@ private:
             const GPU_Car &car = cpuCars[i];
 
             // Only select cars that are actually on the road
-            if (car.state == CarState::Driving || car.state ==CarState::Queuing || car.current_edge_idx == -1) continue;
+            if (car.state == CarState::Evacuated || car.state == CarState::Garage)
+                continue;
 
             const GPU_Edge &edge = cpuEdges[car.current_edge_idx];
             const GPU_Node &startNode = cpuNodes[edge.start_node_idx];
