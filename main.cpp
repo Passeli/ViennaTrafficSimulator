@@ -549,8 +549,8 @@ private:
         }
 
         // --- 2. Setup the Camera (mapBounds) ---
-        float width_meters = temp_max_x - temp_min_x;
-        float height_meters = temp_max_y - temp_min_y;
+        const float width_meters = temp_max_x - temp_min_x;
+        const float height_meters = temp_max_y - temp_min_y;
 
         mapBounds.camera_x = temp_min_x + (width_meters * 0.5f);
         mapBounds.camera_y = temp_min_y + (height_meters * 0.5f);
@@ -1143,13 +1143,13 @@ private:
 
         cmd.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
-        vk::BufferCopy carCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Car) * totalCars};
+        const vk::BufferCopy carCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Car) * totalCars};
         cmd.copyBuffer(**carBuffer, **carReadbackBuffer, carCopy);
 
-        vk::BufferCopy edgeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Edge) * totalEdges};
+        const vk::BufferCopy edgeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Edge) * totalEdges};
         cmd.copyBuffer(**edgeBuffer, **edgeReadbackBuffer, edgeCopy);
 
-        vk::BufferCopy nodeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Node) * cpuNodes.size()};
+        const vk::BufferCopy nodeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Node) * cpuNodes.size()};
         cmd.copyBuffer(**nodeBuffer, **nodeReadbackBuffer, nodeCopy);
 
         cmd.end();
@@ -1159,15 +1159,15 @@ private:
         queue->waitIdle();
 
         // 3. Map the memory and copy it into our C++ vectors
-        void *mappedCars = carReadbackMemory->mapMemory(0, sizeof(GPU_Car) * totalCars);
+        const void *mappedCars = carReadbackMemory->mapMemory(0, sizeof(GPU_Car) * totalCars);
         std::memcpy(cpuCars.data(), mappedCars, sizeof(GPU_Car) * totalCars);
         carReadbackMemory->unmapMemory();
 
-        void *mappedEdges = edgeReadbackMemory->mapMemory(0, sizeof(GPU_Edge) * totalEdges);
+        const void *mappedEdges = edgeReadbackMemory->mapMemory(0, sizeof(GPU_Edge) * totalEdges);
         std::memcpy(cpuEdges.data(), mappedEdges, sizeof(GPU_Edge) * totalEdges);
         edgeReadbackMemory->unmapMemory();
 
-        void *mappedNodes = nodeReadbackMemory->mapMemory(0, sizeof(GPU_Node) * cpuNodes.size());
+        const void *mappedNodes = nodeReadbackMemory->mapMemory(0, sizeof(GPU_Node) * cpuNodes.size());
         std::memcpy(cpuNodes.data(), mappedNodes, sizeof(GPU_Node) * cpuNodes.size());
         nodeReadbackMemory->unmapMemory();
 
@@ -1197,14 +1197,14 @@ private:
         // 1. Convert Screen Pixels to Normalized Device Coordinates (NDC: -1.0 to 1.0)
         float ndcX = (static_cast<float>(screenX) / static_cast<float>(WIDTH)) * 2.0f - 1.0f;
         // Vulkan's Y axis points down, but our world map points up, so we invert Y
-        float ndcY = -((static_cast<float>(screenY) / static_cast<float>(HEIGHT)) * 2.0f - 1.0f);
+        const float ndcY = -((static_cast<float>(screenY) / static_cast<float>(HEIGHT)) * 2.0f - 1.0f);
 
         // 2. Reverse the Aspect Ratio correction
         ndcX *= mapBounds.aspect_ratio;
 
         // 3. Reverse the Zoom and Extent scaling
-        float localX = (ndcX * (mapBounds.extent_width * 0.5f)) / mapBounds.zoom_level;
-        float localY = (ndcY * (mapBounds.extent_height * 0.5f)) / mapBounds.zoom_level;
+        const float localX = (ndcX * (mapBounds.extent_width * 0.5f)) / mapBounds.zoom_level;
+        const float localY = (ndcY * (mapBounds.extent_height * 0.5f)) / mapBounds.zoom_level;
 
         // 4. Reverse the Camera Pan
         outWorldX = localX + mapBounds.camera_x;
@@ -1228,14 +1228,14 @@ private:
             const GPU_Node &endNode = cpuNodes[edge.end_node_idx];
 
             // Interpolate car's world position along the edge
-            float t = (edge.length > 0.0f) ? (car.position / edge.length) : 0.0f;
-            float carWorldX = startNode.x + t * (endNode.x - startNode.x);
-            float carWorldY = startNode.y + t * (endNode.y - startNode.y);
+            const float t = (edge.length > 0.0f) ? (car.position / edge.length) : 0.0f;
+            const float carWorldX = startNode.x + t * (endNode.x - startNode.x);
+            const float carWorldY = startNode.y + t * (endNode.y - startNode.y);
 
             // Calculate distance squared to the mouse click
-            float dx = carWorldX - worldX;
-            float dy = carWorldY - worldY;
-            float distSq = (dx * dx) + (dy * dy);
+            const float dx = carWorldX - worldX;
+            const float dy = carWorldY - worldY;
+            const float distSq = (dx * dx) + (dy * dy);
 
             if (distSq < closestDistSq) {
                 closestDistSq = distSq;
