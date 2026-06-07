@@ -7,14 +7,22 @@ enum class CarState : int32_t {
     Driving = 0,
     Queuing = 1,
     Evacuated = 2,
-    Garage = 3
+    Garage = 3,
+    Stuck = 4
+};
+
+enum class NodeType : int32_t {
+    Normal = 0,
+    OpenExit = 1,
+    ClosedExit = 2,
+    Blind = 3
 };
 
 struct GPU_Node {
     float x = 0.0f;
     float y = 0.0f;
     int32_t lock = -1;
-    int32_t padding = 0;
+    NodeType type = NodeType::Normal;
 };
 
 struct GPU_Edge {

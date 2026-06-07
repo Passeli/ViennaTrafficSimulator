@@ -63,9 +63,11 @@ public:
     ~EvacuationEngine() {
         if (device) {
             device->waitIdle();
-            ImGui_ImplVulkan_Shutdown();
-            ImGui_ImplGlfw_Shutdown();
-            ImGui::DestroyContext();
+            if (imguiInitialized) {
+                ImGui_ImplVulkan_Shutdown();
+                ImGui_ImplGlfw_Shutdown();
+                ImGui::DestroyContext();
+            }
         }
         if (window != nullptr) {
             glfwDestroyWindow(window);
@@ -118,6 +120,7 @@ private:
     std::unique_ptr<vk::raii::PipelineLayout> graphicsPipelineLayout;
     std::unique_ptr<vk::raii::Pipeline> graphicsPipeline;
     std::unique_ptr<vk::raii::Pipeline> streetPipeline;
+    std::unique_ptr<vk::raii::Pipeline> exitNodePipeline;
     GraphicsConstants mapBounds;
 
     // --- SIMULATION CONTROLS ---
@@ -145,10 +148,12 @@ private:
 
     // --- UI STATE ---
     int selectedCarId = 0;
+    bool imguiInitialized = false;
 
     int statGarage = 0;
     int statRoad = 0;
     int statEvacuated = 0;
+    int statStuck = 0;
     float statAvgSpeed = 0.0f;
 
     // --- GRAPH ROUTING DATA (NEW) ---
@@ -168,9 +173,15 @@ private:
         std::println("Recalculating City-Wide GPS Routes...");
         const auto startTime = std::chrono::high_resolution_clock::now();
 
-        // 1. Reset all edges to have no destination
+        // 1. Reset all edges to have no destination, and update exit edge padding
         for (auto &edge: cpuEdges) {
             edge.next_edge_idx = -1;
+        }
+
+        // Update node types for exits
+        for (size_t i = 0; i < allExitNodes.size(); ++i) {
+            const int nodeIdx = allExitNodes[i];
+            cpuNodes[nodeIdx].type = isExitOpen[i] ? NodeType::OpenExit : NodeType::ClosedExit;
         }
 
         std::vector<float> min_travel_time(cpuNodes.size(), std::numeric_limits<float>::max());
@@ -236,20 +247,32 @@ private:
         // 2. Run the CPU Pathfinding
         recalculateGPS();
 
-        // 3. Upload ONLY the newly updated cpuEdges array to VRAM
-        const vk::DeviceSize bufferSize{sizeof(GPU_Edge) * totalEdges};
+        // 3. Upload the newly updated cpuEdges and cpuNodes arrays to VRAM
+        {
+            const vk::DeviceSize bufferSize{sizeof(GPU_Edge) * totalEdges};
+            auto [stagingBuffer, stagingMemory] = createBuffer(
+                bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
+            );
+            void *mappedData{stagingMemory->mapMemory(0, bufferSize)};
+            std::memcpy(mappedData, cpuEdges.data(), bufferSize);
+            stagingMemory->unmapMemory();
+            copyBuffer(*stagingBuffer, *edgeBuffer, bufferSize);
+        }
 
-        auto [stagingBuffer, stagingMemory] = createBuffer(
-            bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
-        );
+        {
+            const vk::DeviceSize bufferSize{sizeof(GPU_Node) * cpuNodes.size()};
+            auto [stagingBuffer, stagingMemory] = createBuffer(
+                bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
+            );
+            void *mappedData{stagingMemory->mapMemory(0, bufferSize)};
+            std::memcpy(mappedData, cpuNodes.data(), bufferSize);
+            stagingMemory->unmapMemory();
+            copyBuffer(*stagingBuffer, *nodeBuffer, bufferSize);
+        }
 
-        void *mappedData{stagingMemory->mapMemory(0, bufferSize)};
-        std::memcpy(mappedData, cpuEdges.data(), bufferSize);
-        stagingMemory->unmapMemory();
-
-        copyBuffer(*stagingBuffer, *edgeBuffer, bufferSize);
-        std::println("GPS Reroute Uploaded to VRAM!");
+        std::println("GPS Reroute and Node Types Uploaded to VRAM!");
 
         // 4. Resume the simulation
         isPaused = wasPaused;
@@ -336,6 +359,7 @@ private:
         init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
         ImGui_ImplVulkan_Init(&init_info);
+        imguiInitialized = true;
     }
 
     void initWindow() {
@@ -385,6 +409,7 @@ private:
 
                 float worldX, worldY;
                 engine->screenToWorld(mouseX, mouseY, worldX, worldY);
+                engine->takeSnapshot();
                 engine->selectClosestCar(worldX, worldY);
             }
         });
@@ -569,7 +594,9 @@ private:
         auto rawEdges{loadBinaryData<GPU_Edge>("vulkan_edges.bin")};
         auto rawCars{loadBinaryData<GPU_Car>("vulkan_cars.bin")};
 
-        for (auto &n: nodes) n.lock = -1;
+        for (auto &n: nodes)
+            n.lock = -1;
+
         for (auto &e: rawEdges) {
             e.head_car_idx = -1;
             e.garage_lock = -1;
@@ -608,9 +635,9 @@ private:
         mapBounds.aspect_ratio = static_cast<float>(WIDTH) / static_cast<float>(HEIGHT);
 
         // Initialize CPU vectors to hold the data
-        cpuCars.resize(totalCars);
+        cpuCars = rawCars;
         cpuEdges = rawEdges;
-        cpuNodes.resize(nodes.size());
+        cpuNodes = nodes;
 
         // Create Readback Buffers (Host Visible + Coherent so the CPU can read them)
         auto createReadback = [&](const vk::DeviceSize size, std::unique_ptr<vk::raii::Buffer> &buf,
@@ -641,10 +668,12 @@ private:
                 .travel_time = travel_time
             });
             forwardGraph[edge.start_node_idx].push_back(i);
+        }
 
-            // Dynamically detect exits!
-            if (edge.next_edge_idx == -1) {
-                exitNodeSet.insert(edge.end_node_idx);
+        // Detect exits only from nodes marked as exits in the binary file
+        for (size_t i = 0; i < cpuNodes.size(); ++i) {
+            if (cpuNodes[i].type == NodeType::OpenExit || cpuNodes[i].type == NodeType::ClosedExit) {
+                exitNodeSet.insert(static_cast<int>(i));
             }
         }
 
@@ -958,6 +987,32 @@ private:
         streetPipelineInfo.pInputAssemblyState = &lineAssembly;
 
         streetPipeline = std::make_unique<vk::raii::Pipeline>(*device, nullptr, streetPipelineInfo);
+
+        // --- EXIT NODE PIPELINE ---
+        const auto exitNodeVertCode{loadBinaryData<uint32_t>("exit_nodes_vert.spv")};
+        const auto exitNodeFragCode{loadBinaryData<uint32_t>("exit_nodes_frag.spv")};
+        const vk::raii::ShaderModule exitNodeVertModule{
+            *device,
+            vk::ShaderModuleCreateInfo{.codeSize = exitNodeVertCode.size() * 4, .pCode = exitNodeVertCode.data()}
+        };
+        const vk::raii::ShaderModule exitNodeFragModule{
+            *device,
+            vk::ShaderModuleCreateInfo{.codeSize = exitNodeFragCode.size() * 4, .pCode = exitNodeFragCode.data()}
+        };
+
+        const std::array<vk::PipelineShaderStageCreateInfo, 2> exitNodeShaderStages = {
+            vk::PipelineShaderStageCreateInfo{
+                .flags = {}, .stage = vk::ShaderStageFlagBits::eVertex, .module = *exitNodeVertModule, .pName = "main"
+            },
+            vk::PipelineShaderStageCreateInfo{
+                .flags = {}, .stage = vk::ShaderStageFlagBits::eFragment, .module = *exitNodeFragModule, .pName = "main"
+            }
+        };
+
+        vk::GraphicsPipelineCreateInfo exitNodePipelineInfo = pipelineInfo;
+        exitNodePipelineInfo.pStages = exitNodeShaderStages.data();
+
+        exitNodePipeline = std::make_unique<vk::raii::Pipeline>(*device, nullptr, exitNodePipelineInfo);
     }
 
     void mainLoop() {
@@ -975,6 +1030,14 @@ private:
 
         while (glfwWindowShouldClose(window) == 0) {
             glfwPollEvents();
+
+            // Read back the selected car's updated data from the previous frame's copy
+            if (!isPaused && selectedCarId >= 0 && selectedCarId < static_cast<int>(totalCars) && !cpuCars.empty()) {
+                const vk::DeviceSize offset = sizeof(GPU_Car) * selectedCarId;
+                const void *mappedData = carReadbackMemory->mapMemory(offset, sizeof(GPU_Car));
+                std::memcpy(&cpuCars[selectedCarId], mappedData, sizeof(GPU_Car));
+                carReadbackMemory->unmapMemory();
+            }
 
             // --- THE FIX: Recreate the swapchain when the window resizes ---
             if (framebufferResized) {
@@ -1096,6 +1159,7 @@ private:
             ImGui::Text("Waiting in Garage: %d", statGarage);
             ImGui::Text("Active on Road: %d", statRoad);
             ImGui::Text("Safely Evacuated: %d", statEvacuated);
+            ImGui::Text("Stuck Cars: %d", statStuck);
             ImGui::Text("City Average Speed: %.1f km/h", statAvgSpeed * 3.6f);
 
             // Progress Bar!
@@ -1118,6 +1182,7 @@ private:
                 if (car.state == CarState::Queuing) stateStr = "Queuing at Intersection";
                 if (car.state == CarState::Evacuated) stateStr = "Evacuated!";
                 if (car.state == CarState::Garage) stateStr = "In Garage";
+                if (car.state == CarState::Stuck) stateStr = "Stuck";
 
                 ImGui::Text("State: %s (%d)", stateStr, car.state);
                 ImGui::Text("Speed: %.2f m/s (%.1f km/h)", car.speed, car.speed * 3.6f);
@@ -1154,7 +1219,8 @@ private:
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, **computePipelineLayout, 0,
                                        {*computeDescriptorSets[0]}, nullptr);
                 const PushConstants pushData{.dt = 0.1f, .num_cars = totalCars, .num_edges = totalEdges};
-                cmd.pushConstants<PushConstants>(**computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, pushData);
+                cmd.pushConstants<PushConstants>(**computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
+                                                 pushData);
 
                 for (int32_t step = 0; step < simSpeed; ++step) {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, **clearEdgesPipeline);
@@ -1194,6 +1260,28 @@ private:
                     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, dstStage, {}, stepBarrier, nullptr,
                                         nullptr);
                 }
+
+                // Copy the selected car's data back to the host visible buffer for dynamic inspection
+                if (selectedCarId >= 0 && selectedCarId < static_cast<int>(totalCars)) {
+                    const vk::BufferMemoryBarrier transferBarrier{
+                        .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+                        .dstAccessMask = vk::AccessFlagBits::eTransferRead,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .buffer = **carBuffer,
+                        .offset = sizeof(GPU_Car) * selectedCarId,
+                        .size = sizeof(GPU_Car)
+                    };
+                    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                                        vk::PipelineStageFlagBits::eTransfer, {}, nullptr, transferBarrier, nullptr);
+
+                    const vk::BufferCopy copyRegion{
+                        .srcOffset = sizeof(GPU_Car) * selectedCarId,
+                        .dstOffset = sizeof(GPU_Car) * selectedCarId,
+                        .size = sizeof(GPU_Car)
+                    };
+                    cmd.copyBuffer(**carBuffer, **carReadbackBuffer, copyRegion);
+                }
             }
 
             const vk::RenderPassBeginInfo renderPassInfo{
@@ -1217,13 +1305,16 @@ private:
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, **graphicsPipelineLayout, 0,
                                    {*computeDescriptorSets[0]}, nullptr);
             cmd.pushConstants<GraphicsConstants>(**graphicsPipelineLayout, vk::ShaderStageFlagBits::eAllGraphics, 0,
-                                                mapBounds);
+                                                 mapBounds);
 
             // Draw the Map
             cmd.draw(2, totalEdges, 0, 0);
 
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **graphicsPipeline);
             cmd.draw(6, totalCars, 0, 0);
+
+            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **exitNodePipeline);
+            cmd.draw(6, totalEdges, 0, 0);
 
             // --- 4. DRAW IMGUI ON TOP OF THE MAP ---
             // ImGui uses its OWN internal pipeline and push constants.
@@ -1305,6 +1396,7 @@ private:
         statGarage = 0;
         statRoad = 0;
         statEvacuated = 0;
+        statStuck = 0;
         double totalSpeed = 0.0;
 
         for (const auto &car: cpuCars) {
@@ -1315,6 +1407,8 @@ private:
                 statEvacuated++;
             } else if (car.state == CarState::Garage) {
                 statGarage++;
+            } else if (car.state == CarState::Stuck) {
+                statStuck++;
             }
         }
         statAvgSpeed = statRoad > 0 ? static_cast<float>(totalSpeed / statRoad) : 0.0f;

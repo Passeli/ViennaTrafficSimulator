@@ -80,6 +80,7 @@ set(CLEAR_EDGES_SLANG "${SHADER_DIR}/clear_edges.slang")
 set(BUILD_GRID_SLANG "${SHADER_DIR}/build_grid.slang")
 set(PHYSICS_SLANG "${SHADER_DIR}/physics.slang")
 set(STREETS_SLANG "${SHADER_DIR}/streets.slang")
+set(EXIT_NODES_SLANG "${SHADER_DIR}/exit_nodes.slang")
 
 # Define output binaries
 set(VERT_SPV "${CMAKE_CURRENT_BINARY_DIR}/graphics_vert.spv")
@@ -89,6 +90,8 @@ set(BUILD_GRID_SPV "${CMAKE_CURRENT_BINARY_DIR}/build_grid.spv")
 set(PHYSICS_SPV "${CMAKE_CURRENT_BINARY_DIR}/physics.spv")
 set(STREETS_VERT_SPV "${CMAKE_CURRENT_BINARY_DIR}/streets_vert.spv")
 set(STREETS_FRAG_SPV "${CMAKE_CURRENT_BINARY_DIR}/streets_frag.spv")
+set(EXIT_NODES_VERT_SPV "${CMAKE_CURRENT_BINARY_DIR}/exit_nodes_vert.spv")
+set(EXIT_NODES_FRAG_SPV "${CMAKE_CURRENT_BINARY_DIR}/exit_nodes_frag.spv")
 
 # Helper to pass include directories to slangc (if common.slang is in the same dir)
 set(SLANG_INCLUDE_PATH "-I${SHADER_DIR}")
@@ -128,6 +131,16 @@ add_custom_command(
         COMMAND slangc ${STREETS_SLANG} ${SLANG_INCLUDE_PATH} -target spirv -entry fragmentMain -stage fragment -o ${STREETS_FRAG_SPV}
         DEPENDS ${STREETS_SLANG}
 )
+add_custom_command(
+        OUTPUT ${EXIT_NODES_VERT_SPV}
+        COMMAND slangc ${EXIT_NODES_SLANG} ${SLANG_INCLUDE_PATH} -target spirv -entry vertexMain -stage vertex -o ${EXIT_NODES_VERT_SPV}
+        DEPENDS ${EXIT_NODES_SLANG}
+)
+add_custom_command(
+        OUTPUT ${EXIT_NODES_FRAG_SPV}
+        COMMAND slangc ${EXIT_NODES_SLANG} ${SLANG_INCLUDE_PATH} -target spirv -entry fragmentMain -stage fragment -o ${EXIT_NODES_FRAG_SPV}
+        DEPENDS ${EXIT_NODES_SLANG}
+)
 
 add_custom_target(CompileAllShaders DEPENDS
         ${VERT_SPV}
@@ -137,6 +150,8 @@ add_custom_target(CompileAllShaders DEPENDS
         ${PHYSICS_SPV}
         ${STREETS_VERT_SPV}
         ${STREETS_FRAG_SPV}
+        ${EXIT_NODES_VERT_SPV}
+        ${EXIT_NODES_FRAG_SPV}
 )
 add_dependencies(BA CompileAllShaders)
 

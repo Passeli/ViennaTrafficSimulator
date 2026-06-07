@@ -223,8 +223,19 @@ print(f"🔥 TOTAL CARS GENERATED: {total_spawn_capacity:,} 🔥")
 print("-> Snapping features to the street graph...")
 centroids_latlon = valid_parking.geometry.centroid.to_crs(epsg=4326)
 
-# Vectorized nearest-edge lookup
-nearest_edges = ox.distance.nearest_edges(G, centroids_latlon.x, centroids_latlon.y)
+# Create a subgraph of G that excludes edges leading to blind nodes
+exit_nodes_set = set(exit_nodes)
+non_blind_edges = []
+for u, v, key in G.edges(keys=True):
+    is_v_exit = v in exit_nodes_set
+    is_v_blind = (not is_v_exit) and (G.out_degree(v) == 0)
+    if not is_v_blind:
+        non_blind_edges.append((u, v, key))
+
+G_non_blind = G.edge_subgraph(non_blind_edges)
+
+# Vectorized nearest-edge lookup on the non-blind subgraph
+nearest_edges = ox.distance.nearest_edges(G_non_blind, centroids_latlon.x, centroids_latlon.y)
 
 # Aggregate the capacities onto the specific edges
 edge_spawn_capacities = {}
@@ -347,14 +358,24 @@ print("3. Packing flat binary files for Vulkan RWStructuredBuffers...")
 
 # --- A. NODES BINARY (16 Bytes: ffii) ---
 print("   -> Packing Nodes...")
+exit_nodes_set = set(exit_nodes)
 with open("vulkan_nodes.bin", "wb") as f:
     for node_id in G.nodes():
         data = G.nodes[node_id]
         x = float(data['x'])
         y = float(data['y'])
         lock = -1
-        padding = 0
-        f.write(struct.pack('ffii', x, y, lock, padding))
+        is_exit = node_id in exit_nodes_set
+        
+        # NodeType: Normal = 0, OpenExit = 1, ClosedExit = 2, Blind = 3
+        if is_exit:
+            node_type = 1
+        elif G.out_degree(node_id) == 0:
+            node_type = 3
+        else:
+            node_type = 0
+            
+        f.write(struct.pack('ffii', x, y, lock, node_type))
 
 # --- B. EDGES BINARY (32 Bytes: iiiffiii) ---
 print("   -> Packing Edges...")

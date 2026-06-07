@@ -43,13 +43,17 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
   const float nx = local_x / (pc.extent_width * 0.5) / pc.aspect_ratio;
   const float ny = local_y / (pc.extent_height * 0.5);
 
-  // Driving = Green, Queuing/Blocked = Red
-  const float3 debug_color =
-      (car.state == CarState::Driving) ? float3(0, 1, 0) : float3(1, 0, 0);
+  // Driving = Green, Stuck = Orange, Queuing/Blocked = Red
+  float3 debug_color = float3(1.0, 0.0, 0.0);
+  if (car.state == CarState::Driving) {
+    debug_color = float3(0.0, 1.0, 0.0);
+  } else if (car.state == CarState::Stuck) {
+    debug_color = float3(1.0, 0.6, 0.0);
+  }
 
-  const float size = 0.001;
+  const float size = 0.004;
   const float2 offsets[6] = { float2(-2, -1), float2(0, -1), float2(-2, 1),
-                        float2(0, -1),  float2(0, 1),  float2(-2, 1) };
+                              float2(0, -1),  float2(0, 1),  float2(-2, 1) };
 
   const float rx = (offsets[vertexID].x * size) / pc.aspect_ratio;
   const float ry = offsets[vertexID].y * size;

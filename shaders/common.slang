@@ -1,10 +1,18 @@
-enum CarState : int { Driving = 0, Queuing = 1, Evacuated = 2, Garage = 3 };
+enum CarState : int {
+  Driving = 0,
+  Queuing = 1,
+  Evacuated = 2,
+  Garage = 3,
+  Stuck = 4
+};
+
+enum NodeType : int { Normal = 0, OpenExit = 1, ClosedExit = 2, Blind = 3 };
 
 struct Node {
   float x;
   float y;
   int lock;
-  int padding;
+  NodeType type;
 };
 
 struct Edge {

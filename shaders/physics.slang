@@ -38,13 +38,15 @@ void main(uint3 threadId: SV_DispatchThreadID) {
 
     // Traverse the spatial linked list
     int current_search_id = edge.head_car_idx;
+    int closest_front_car_id = -1;
     while (current_search_id != -1) {
       if ((uint)current_search_id != id) {
         Car other_car = cars[current_search_id];
 
         if (other_car.current_edge_idx == car.current_edge_idx) {
           if (other_car.state == CarState::Driving ||
-              other_car.state == CarState::Queuing) {
+              other_car.state == CarState::Queuing ||
+              other_car.state == CarState::Stuck) {
             float dist_to_other_front = other_car.position - car.position;
 
             if (dist_to_other_front > 0.0 ||
@@ -56,6 +58,7 @@ void main(uint3 threadId: SV_DispatchThreadID) {
                 front_distance = true_gap;
                 front_speed = other_car.speed;
                 is_lead_car = false;
+                closest_front_car_id = current_search_id;
               }
             }
           }
@@ -70,7 +73,17 @@ void main(uint3 threadId: SV_DispatchThreadID) {
     if (is_lead_car && (car.position + 0.1 >= edge.length)) {
       car.position = edge.length; // Snap perfectly to the stop line
       car.speed = 0.0;
-      car.state = CarState::Queuing;
+      if (nodes[edge.end_node_idx].type == NodeType::Blind) {
+        car.state = CarState::Stuck;
+      } else {
+        car.state = CarState::Queuing;
+      }
+    } else if (!is_lead_car && closest_front_car_id != -1 &&
+               cars[closest_front_car_id].state == CarState::Stuck &&
+               (front_distance <= MIN_GAP + 0.1)) {
+      car.position = cars[closest_front_car_id].position - CAR_LENGTH - MIN_GAP;
+      car.speed = 0.0;
+      car.state = CarState::Stuck;
     } else {
       // Intelligent Driver Model (IDM)
       float accel = 0.0;
@@ -111,15 +124,20 @@ void main(uint3 threadId: SV_DispatchThreadID) {
         InterlockedExchange(nodes[target_node].lock, -1, dummy);
       } else {
         bool entrance_clear = true;
+        bool blocked_by_stuck = false;
         int next_search_id = edges[next_edge].head_car_idx;
 
         while (next_search_id != -1) {
           Car next_car = cars[next_search_id];
           if (next_car.state == CarState::Driving ||
-              next_car.state == CarState::Queuing) {
+              next_car.state == CarState::Queuing ||
+              next_car.state == CarState::Stuck) {
             float tail_gap = next_car.position - CAR_LENGTH;
             if (tail_gap < MIN_GAP) {
               entrance_clear = false;
+              if (next_car.state == CarState::Stuck) {
+                blocked_by_stuck = true;
+              }
               break;
             }
           }
@@ -131,7 +149,11 @@ void main(uint3 threadId: SV_DispatchThreadID) {
           car.position = 0.0;
           car.speed = 0.0;
           car.state = CarState::Driving;
-          int dummy;
+          int dummy = 0;
+          InterlockedExchange(nodes[target_node].lock, -1, dummy);
+        } else if (blocked_by_stuck) {
+          car.state = CarState::Stuck;
+          int dummy = 0;
           InterlockedExchange(nodes[target_node].lock, -1, dummy);
         }
       }
@@ -154,7 +176,8 @@ void main(uint3 threadId: SV_DispatchThreadID) {
         Car next_car = cars[next_search_id];
         if (next_car.current_edge_idx == car.current_edge_idx &&
             (next_car.state == CarState::Driving ||
-             next_car.state == CarState::Queuing)) {
+             next_car.state == CarState::Queuing ||
+             next_car.state == CarState::Stuck)) {
           float tail_gap = next_car.position - CAR_LENGTH;
           if (tail_gap < 5.0) {
             entrance_clear = false;
