@@ -29,8 +29,8 @@ struct GPU_Edge {
     float length{};
     float max_speed{};
     int32_t head_car_idx{-1};
+    int32_t garage_lock{-1};
     int32_t padding1{};
-    int32_t padding2{};
 };
 
 struct GPU_Car {
@@ -190,6 +190,11 @@ private:
 
     // --- UI STATE ---
     int selectedCarId = 0;
+
+    int statGarage = 0;
+    int statRoad = 0;
+    int statEvacuated = 0;
+    float statAvgSpeed = 0.0f;
 
     // --- RECREATION LOGIC ---
     void recreateSwapchain() {
@@ -517,7 +522,10 @@ private:
         auto rawCars{loadBinaryData<GPU_Car>("vulkan_cars.bin")};
 
         for (auto &n: nodes) n.lock = -1;
-        for (auto &e: rawEdges) e.head_car_idx = -1;
+        for (auto &e: rawEdges) {
+            e.head_car_idx = -1;
+            e.garage_lock = -1;
+        }
         for (auto &c: rawCars) c.next_car_idx = -1;
 
         totalCars = static_cast<uint32_t>(rawCars.size());
@@ -943,6 +951,17 @@ private:
                 takeSnapshot(); // Pulls the data from VRAM!
             }
 
+            ImGui::Separator();
+            ImGui::Text("--- EVACUATION METRICS ---");
+            ImGui::Text("Waiting in Garage: %d", statGarage);
+            ImGui::Text("Active on Road: %d", statRoad);
+            ImGui::Text("Safely Evacuated: %d", statEvacuated);
+            ImGui::Text("City Average Speed: %.1f km/h", statAvgSpeed * 3.6f);
+
+            // Progress Bar!
+            float progress = static_cast<float>(statEvacuated) / static_cast<float>(totalCars);
+            ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f), "Evacuation Progress");
+
             if (!cpuCars.empty()) {
                 ImGui::Spacing();
                 // Allow the user to type in a Car ID to inspect
@@ -1152,6 +1171,24 @@ private:
         std::memcpy(cpuNodes.data(), mappedNodes, sizeof(GPU_Node) * cpuNodes.size());
         nodeReadbackMemory->unmapMemory();
 
+        std::println("Snapshot downloaded from VRAM to RAM!");
+
+        statGarage = 0;
+        statRoad = 0;
+        statEvacuated = 0;
+        double totalSpeed = 0.0;
+
+        for (const auto &car: cpuCars) {
+            if (car.state == 0 || car.state == 1) {
+                statRoad++;
+                totalSpeed += car.speed;
+            } else if (car.state == 2) {
+                statEvacuated++;
+            } else if (car.state == 3) {
+                statGarage++;
+            }
+        }
+        statAvgSpeed = statRoad > 0 ? static_cast<float>(totalSpeed / statRoad) : 0.0f;
         std::println("Snapshot downloaded from VRAM to RAM!");
     }
 
