@@ -68,7 +68,6 @@ void main(uint3 threadId: SV_DispatchThreadID) {
     }
 
     float target_gap = is_lead_car ? 0.0 : MIN_GAP;
-    float safe_dist = target_gap + (car.speed * TIME_GAP);
 
     if (is_lead_car && (car.position + 0.1 >= edge.length)) {
       car.position = edge.length; // Snap perfectly to the stop line
@@ -85,24 +84,29 @@ void main(uint3 threadId: SV_DispatchThreadID) {
       car.speed = 0.0;
       car.state = CarState::Stuck;
     } else {
-      // Intelligent Driver Model (IDM)
-      float accel = 0.0;
-      if (front_distance < safe_dist) {
-        float speed_diff = car.speed - front_speed;
-        accel = -1.0 * (safe_dist / max(front_distance, 0.1)) *
-                max(speed_diff, 1.0);
-      } else {
-        float speed_ratio = car.speed / edge.max_speed;
-        accel = 2.0 * (1.0 - pow(speed_ratio, 4.0));
-      }
+      // Official Intelligent Driver Model (IDM)
+      float speed_diff = is_lead_car ? car.speed : (car.speed - front_speed);
+
+      // Snappy parameters for static stop lines vs safe parameters for followers
+      // T is safe time headway (seconds)
+      float T = is_lead_car ? 0.6 : TIME_GAP;
+      // denom is 2 * sqrt(a * b) where desired acceleration a = 1.5 m/s^2.
+      // Lead cars: b = 3.5 m/s^2 (firm braking) -> 2 * sqrt(1.5 * 3.5) = 4.5825
+      // Followers: b = 2.0 m/s^2 (comfortable braking) -> 2 * sqrt(1.5 * 2.0) = 3.4641
+      float denom = is_lead_car ? 4.5825 : 3.4641;
+
+      float dynamic_gap = target_gap + (car.speed * T) +
+                          (car.speed * speed_diff) / denom;
+      dynamic_gap = max(dynamic_gap, target_gap);
+
+      float speed_ratio = car.speed / edge.max_speed;
+      float accel = 1.5 * (1.0 - pow(speed_ratio, 4.0) -
+                           pow(dynamic_gap / max(front_distance, 0.1), 2.0));
 
       accel = clamp(accel, -5.0, 3.0);
       car.speed = max(0.0, car.speed + accel * pc.dt);
 
-      float intended_movement = car.speed * pc.dt;
-      float max_allowed_movement = max(0.0, front_distance - 0.01);
-
-      car.position += min(intended_movement, max_allowed_movement);
+      car.position += car.speed * pc.dt;
     }
   }
 
