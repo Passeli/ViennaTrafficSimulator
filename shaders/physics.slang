@@ -12,7 +12,7 @@ ConstantBuffer<PushConstants> pc;
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 threadId: SV_DispatchThreadID) {
-  uint id = threadId.x;
+  const uint id = threadId.x;
   if (id >= pc.num_cars)
     return;
 
@@ -21,12 +21,12 @@ void main(uint3 threadId: SV_DispatchThreadID) {
   if (car.state == CarState::Evacuated)
     return;
 
-  Edge edge = edges[car.current_edge_idx];
+  const Edge edge = edges[car.current_edge_idx];
 
   // --- PHYSICAL CONSTANTS ---
-  float CAR_LENGTH = 4.5;
-  float MIN_GAP = 0.5;
-  float TIME_GAP = 1.5;
+  const float CAR_LENGTH = 4.5;
+  const float MIN_GAP = 0.5;
+  const float TIME_GAP = 1.5;
 
   // ==========================================
   // PHASE 1: DRIVING STATE (CarState::Driving)

@@ -10,7 +10,7 @@ ConstantBuffer<PushConstants> pc;
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 threadId: SV_DispatchThreadID) {
-  uint id = threadId.x;
+  const uint id = threadId.x;
   if (id >= pc.num_cars)
     return;
 
@@ -21,7 +21,7 @@ void main(uint3 threadId: SV_DispatchThreadID) {
     return;
   }
 
-  int edge_idx = cars[id].current_edge_idx;
+  const int edge_idx = cars[id].current_edge_idx;
 
   // Atomically insert this car at the head of the street's linked list
   int original_head;

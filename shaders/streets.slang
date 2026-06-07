@@ -14,18 +14,18 @@ struct VertexOutput {
 [shader("vertex")]
 VertexOutput vertexMain(uint vertexID: SV_VertexID,
                         uint instanceID: SV_InstanceID) {
-  Edge edge = edges[instanceID];
+  const Edge edge = edges[instanceID];
 
   // vertexID 0 gets the start node, vertexID 1 gets the end node
-  Node n =
+  const Node n =
       (vertexID == 0) ? nodes[edge.start_node_idx] : nodes[edge.end_node_idx];
 
   // 1. Pan and Zoom Projection
-  float local_x = (n.x - pc.camera_x) * pc.zoom_level;
-  float local_y = (n.y - pc.camera_y) * pc.zoom_level;
+  const float local_x = (n.x - pc.camera_x) * pc.zoom_level;
+  const float local_y = (n.y - pc.camera_y) * pc.zoom_level;
 
-  float nx = local_x / (pc.extent_width * 0.5) / pc.aspect_ratio;
-  float ny = local_y / (pc.extent_height * 0.5);
+  const float nx = local_x / (pc.extent_width * 0.5) / pc.aspect_ratio;
+  const float ny = local_y / (pc.extent_height * 0.5);
 
   VertexOutput output;
   // -ny inverts the Y axis so North is UP
