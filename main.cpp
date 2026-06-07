@@ -155,6 +155,7 @@ private:
     int statEvacuated = 0;
     int statStuck = 0;
     float statAvgSpeed = 0.0f;
+    float simTime = 0.0f;
 
     // --- GRAPH ROUTING DATA (NEW) ---
     struct IncomingEdge {
@@ -446,7 +447,7 @@ private:
                     if (key == GLFW_KEY_SPACE) {
                         engine->isPaused = !engine->isPaused;
                     } else if (key == GLFW_KEY_UP || key == GLFW_KEY_RIGHT) {
-                        engine->simSpeed = std::min(engine->simSpeed * 2, 64);
+                        engine->simSpeed = std::min(engine->simSpeed * 2, 256);
                     } else if (key == GLFW_KEY_DOWN || key == GLFW_KEY_LEFT) {
                         engine->simSpeed = std::max(engine->simSpeed / 2, 1);
                     }
@@ -1028,8 +1029,30 @@ private:
             .color = vk::ClearColorValue{std::array<float, 4>{0.05f, 0.05f, 0.1f, 1.0f}}
         };
 
-        while (glfwWindowShouldClose(window) == 0) {
+        double lastFrameTime = glfwGetTime();
+        double accumulatedSimTimeQueue = 0.0;
+
+        // Take an initial snapshot so the UI has accurate stats on startup
+        takeSnapshot();
+
+        for (double lastSnapshotTime = glfwGetTime(); glfwWindowShouldClose(window) == 0;) {
             glfwPollEvents();
+            if (glfwWindowShouldClose(window)) break;
+
+            const double currentFrameTime = glfwGetTime();
+            const double dt_real = currentFrameTime - lastFrameTime;
+            lastFrameTime = currentFrameTime;
+
+            // Periodically take a snapshot to update statistics and check if the simulation is finished
+            if (!isPaused && (currentFrameTime - lastSnapshotTime >= 1.0)) {
+                takeSnapshot();
+                lastSnapshotTime = currentFrameTime;
+
+                // Stop simulation if finished (no active cars on the road and no cars left in the garage)
+                if (statRoad == 0 && statGarage == 0) {
+                    isPaused = true;
+                }
+            }
 
             // Read back the selected car's updated data from the previous frame's copy
             if (!isPaused && selectedCarId >= 0 && selectedCarId < static_cast<int>(totalCars) && !cpuCars.empty()) {
@@ -1142,20 +1165,16 @@ private:
             if (ImGui::Button(isPaused ? "Resume Simulation" : "Pause Simulation")) {
                 isPaused = !isPaused;
             }
-            ImGui::SliderInt("Simulation Speed", &simSpeed, 1, 64, "%d x");
-
-            // ==========================================
-            // --- NEW: THE DATA INSPECTOR ---
-            // ==========================================
-            ImGui::Separator();
-            ImGui::Text("GPU Memory Inspector");
-
-            if (ImGui::Button("Download GPU Snapshot")) {
-                takeSnapshot(); // Pulls the data from VRAM!
-            }
+            ImGui::SliderInt("Simulation Speed", &simSpeed, 1, 256, "%d x");
 
             ImGui::Separator();
             ImGui::Text("--- EVACUATION METRICS ---");
+            {
+                int hours = static_cast<int>(simTime) / 3600;
+                int minutes = (static_cast<int>(simTime) % 3600) / 60;
+                float seconds = std::fmod(simTime, 60.0f);
+                ImGui::Text("Simulation Time: %02d:%02d:%04.1f", hours, minutes, seconds);
+            }
             ImGui::Text("Waiting in Garage: %d", statGarage);
             ImGui::Text("Active on Road: %d", statRoad);
             ImGui::Text("Safely Evacuated: %d", statEvacuated);
@@ -1164,7 +1183,8 @@ private:
 
             // Progress Bar!
             float progress = static_cast<float>(statEvacuated) / static_cast<float>(totalCars);
-            ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f), "Evacuation Progress");
+            std::string progressText = std::format("Evacuation Progress: {:.1f}%", progress * 100.0f);
+            ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f), progressText.c_str());
 
             if (!cpuCars.empty()) {
                 ImGui::Spacing();
@@ -1215,14 +1235,29 @@ private:
             constexpr vk::CommandBufferBeginInfo cmdBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
             cmd.begin(cmdBeginInfo);
 
+            int32_t stepsToRun = 0;
             if (!isPaused) {
+                const double capped_dt = std::min(dt_real, 0.033);
+                accumulatedSimTimeQueue += capped_dt * simSpeed;
+                while (accumulatedSimTimeQueue >= 0.1) {
+                    stepsToRun++;
+                    accumulatedSimTimeQueue -= 0.1;
+                }
+                if (stepsToRun > 256) {
+                    stepsToRun = 256;
+                    accumulatedSimTimeQueue = 0.0;
+                }
+            }
+
+            if (stepsToRun > 0) {
+                simTime += static_cast<float>(stepsToRun) * 0.1f;
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, **computePipelineLayout, 0,
                                        {*computeDescriptorSets[0]}, nullptr);
                 const PushConstants pushData{.dt = 0.1f, .num_cars = totalCars, .num_edges = totalEdges};
                 cmd.pushConstants<PushConstants>(**computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
                                                  pushData);
 
-                for (int32_t step = 0; step < simSpeed; ++step) {
+                for (int32_t step = 0; step < stepsToRun; ++step) {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, **clearEdgesPipeline);
                     cmd.dispatch((totalEdges + 255) / 256, 1, 1);
 
@@ -1250,7 +1285,7 @@ private:
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, **physicsPipeline);
                     cmd.dispatch((totalCars + 255) / 256, 1, 1);
 
-                    vk::PipelineStageFlags dstStage = (step == simSpeed - 1)
+                    vk::PipelineStageFlags dstStage = (step == stepsToRun - 1)
                                                           ? vk::PipelineStageFlagBits::eVertexShader
                                                           : vk::PipelineStageFlagBits::eComputeShader;
                     constexpr vk::MemoryBarrier stepBarrier{
@@ -1291,8 +1326,6 @@ private:
             };
             cmd.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
 
-            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **streetPipeline);
-
             // Set Dynamic Viewport & Scissor
             const vk::Viewport dynamicViewport{
                 .x = 0.0f, .y = 0.0f, .width = static_cast<float>(swapchainExtent.width),
@@ -1301,6 +1334,8 @@ private:
             cmd.setViewport(0, dynamicViewport);
             const vk::Rect2D dynamicScissor{.offset = {0, 0}, .extent = swapchainExtent};
             cmd.setScissor(0, dynamicScissor);
+
+            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **streetPipeline);
 
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, **graphicsPipelineLayout, 0,
                                    {*computeDescriptorSets[0]}, nullptr);
@@ -1412,7 +1447,6 @@ private:
             }
         }
         statAvgSpeed = statRoad > 0 ? static_cast<float>(totalSpeed / statRoad) : 0.0f;
-        std::println("Snapshot downloaded from VRAM to RAM!");
     }
 
     // Converts raw GLFW window pixels into Vienna World Coordinates (Meters)
