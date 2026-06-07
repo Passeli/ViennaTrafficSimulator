@@ -118,11 +118,11 @@ void main(uint3 threadId: SV_DispatchThreadID) {
                                original_lock);
 
     if (original_lock == -1 || original_lock == (int)id) {
-      if (next_edge == -1) {
+      if (nodes[target_node].type == NodeType::OpenExit) {
         car.state = CarState::Evacuated;
         int dummy = 0;
         InterlockedExchange(nodes[target_node].lock, -1, dummy);
-      } else {
+      } else if (next_edge != -1) {
         bool entrance_clear = true;
         bool blocked_by_stuck = false;
         int next_search_id = edges[next_edge].head_car_idx;
@@ -151,11 +151,17 @@ void main(uint3 threadId: SV_DispatchThreadID) {
           car.state = CarState::Driving;
           int dummy = 0;
           InterlockedExchange(nodes[target_node].lock, -1, dummy);
-        } else if (blocked_by_stuck) {
-          car.state = CarState::Stuck;
+        } else {
+          if (blocked_by_stuck) {
+            car.state = CarState::Stuck;
+          }
           int dummy = 0;
           InterlockedExchange(nodes[target_node].lock, -1, dummy);
         }
+      } else {
+        // No path to exit (e.g. exit closed or all exits closed)
+        int dummy = 0;
+        InterlockedExchange(nodes[target_node].lock, -1, dummy);
       }
     }
   }
