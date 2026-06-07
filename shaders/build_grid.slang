@@ -1,31 +1,4 @@
-struct Edge {
-  int start_node_idx;
-  int end_node_idx;
-  int next_edge_idx;
-  float length;
-  float max_speed;
-  int head_car_idx;
-  int garage_lock;
-  int p1;
-};
-
-struct Car {
-  int current_edge_idx;
-  float position;
-  float speed;
-  int state;
-  int next_car_idx;
-  int p1;
-  int p2;
-  int p3;
-};
-
-struct PushConstants {
-  float dt;
-  uint num_cars;
-  uint num_edges;
-  uint padding;
-};
+#include "common.slang"
 
 [[vk::binding(1, 0)]]
 RWStructuredBuffer<Edge> edges;
@@ -41,10 +14,12 @@ void main(uint3 threadId: SV_DispatchThreadID) {
   if (id >= pc.num_cars)
     return;
 
-  cars[id].next_car_idx = -1; // Clear old pointer
+  cars[id].next_car_idx = -1;
 
-  if (cars[id].state == 2 || cars[id].state == 3)
-    return; // Don't track exited or garaged cars
+  if (cars[id].state == CarState::Evacuated ||
+      cars[id].state == CarState::Garage) {
+    return;
+  }
 
   int edge_idx = cars[id].current_edge_idx;
 

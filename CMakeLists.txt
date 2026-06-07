@@ -71,12 +71,17 @@ target_compile_definitions(BA PRIVATE
 # --- AUTO-COMPILE ALL SLANG SHADERS ---
 # ==========================================
 
-set(GRAPHICS_SLANG "${CMAKE_SOURCE_DIR}/graphics.slang")
-set(CLEAR_EDGES_SLANG "${CMAKE_SOURCE_DIR}/clear_edges.slang")
-set(BUILD_GRID_SLANG "${CMAKE_SOURCE_DIR}/build_grid.slang")
-set(PHYSICS_SLANG "${CMAKE_SOURCE_DIR}/physics.slang")
-set(STREETS_SLANG "${CMAKE_SOURCE_DIR}/streets.slang")
+# Define your shader directory
+set(SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders")
 
+# Define input files relative to SHADER_DIR
+set(GRAPHICS_SLANG "${SHADER_DIR}/graphics.slang")
+set(CLEAR_EDGES_SLANG "${SHADER_DIR}/clear_edges.slang")
+set(BUILD_GRID_SLANG "${SHADER_DIR}/build_grid.slang")
+set(PHYSICS_SLANG "${SHADER_DIR}/physics.slang")
+set(STREETS_SLANG "${SHADER_DIR}/streets.slang")
+
+# Define output binaries
 set(VERT_SPV "${CMAKE_CURRENT_BINARY_DIR}/graphics_vert.spv")
 set(FRAG_SPV "${CMAKE_CURRENT_BINARY_DIR}/graphics_frag.spv")
 set(CLEAR_EDGES_SPV "${CMAKE_CURRENT_BINARY_DIR}/clear_edges.spv")
@@ -85,39 +90,42 @@ set(PHYSICS_SPV "${CMAKE_CURRENT_BINARY_DIR}/physics.spv")
 set(STREETS_VERT_SPV "${CMAKE_CURRENT_BINARY_DIR}/streets_vert.spv")
 set(STREETS_FRAG_SPV "${CMAKE_CURRENT_BINARY_DIR}/streets_frag.spv")
 
+# Helper to pass include directories to slangc (if common.slang is in the same dir)
+set(SLANG_INCLUDE_PATH "-I${SHADER_DIR}")
+
 add_custom_command(
         OUTPUT ${VERT_SPV}
-        COMMAND slangc ${GRAPHICS_SLANG} -target spirv -entry vertexMain -stage vertex -o ${VERT_SPV}
+        COMMAND slangc ${GRAPHICS_SLANG} ${SLANG_INCLUDE_PATH} -target spirv -entry vertexMain -stage vertex -o ${VERT_SPV}
         DEPENDS ${GRAPHICS_SLANG}
 )
 add_custom_command(
         OUTPUT ${FRAG_SPV}
-        COMMAND slangc ${GRAPHICS_SLANG} -target spirv -entry fragmentMain -stage fragment -o ${FRAG_SPV}
+        COMMAND slangc ${GRAPHICS_SLANG} ${SLANG_INCLUDE_PATH} -target spirv -entry fragmentMain -stage fragment -o ${FRAG_SPV}
         DEPENDS ${GRAPHICS_SLANG}
 )
 add_custom_command(
         OUTPUT ${CLEAR_EDGES_SPV}
-        COMMAND slangc ${CLEAR_EDGES_SLANG} -target spirv -o ${CLEAR_EDGES_SPV}
+        COMMAND slangc ${CLEAR_EDGES_SLANG} ${SLANG_INCLUDE_PATH} -target spirv -o ${CLEAR_EDGES_SPV}
         DEPENDS ${CLEAR_EDGES_SLANG}
 )
 add_custom_command(
         OUTPUT ${BUILD_GRID_SPV}
-        COMMAND slangc ${BUILD_GRID_SLANG} -target spirv -o ${BUILD_GRID_SPV}
+        COMMAND slangc ${BUILD_GRID_SLANG} ${SLANG_INCLUDE_PATH} -target spirv -o ${BUILD_GRID_SPV}
         DEPENDS ${BUILD_GRID_SLANG}
 )
 add_custom_command(
         OUTPUT ${PHYSICS_SPV}
-        COMMAND slangc ${PHYSICS_SLANG} -target spirv -o ${PHYSICS_SPV}
+        COMMAND slangc ${PHYSICS_SLANG} ${SLANG_INCLUDE_PATH} -target spirv -o ${PHYSICS_SPV}
         DEPENDS ${PHYSICS_SLANG}
 )
 add_custom_command(
         OUTPUT ${STREETS_VERT_SPV}
-        COMMAND slangc ${STREETS_SLANG} -target spirv -entry vertexMain -stage vertex -o ${STREETS_VERT_SPV}
+        COMMAND slangc ${STREETS_SLANG} ${SLANG_INCLUDE_PATH} -target spirv -entry vertexMain -stage vertex -o ${STREETS_VERT_SPV}
         DEPENDS ${STREETS_SLANG}
 )
 add_custom_command(
         OUTPUT ${STREETS_FRAG_SPV}
-        COMMAND slangc ${STREETS_SLANG} -target spirv -entry fragmentMain -stage fragment -o ${STREETS_FRAG_SPV}
+        COMMAND slangc ${STREETS_SLANG} ${SLANG_INCLUDE_PATH} -target spirv -entry fragmentMain -stage fragment -o ${STREETS_FRAG_SPV}
         DEPENDS ${STREETS_SLANG}
 )
 

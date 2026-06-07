@@ -1,20 +1,4 @@
-struct Edge {
-  int start_node_idx;
-  int end_node_idx;
-  int next_edge_idx;
-  float length;
-  float max_speed;
-  int head_car_idx;
-  int garage_lock;
-  int p1;
-};
-
-struct PushConstants {
-  float dt;
-  uint num_cars;
-  uint num_edges;
-  uint padding;
-};
+#include "common.slang"
 
 [[vk::binding(1, 0)]]
 RWStructuredBuffer<Edge> edges;

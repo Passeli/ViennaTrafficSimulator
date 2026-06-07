@@ -12,56 +12,11 @@
 #include <memory>
 #include <iostream>
 #include <algorithm>
+#include <queue>
+#include <set>
+#include <chrono>
 
-// --- 1. THE DATA STRUCTS (Aligned to 16 bytes) ---
-
-struct GPU_Node {
-    float x{};
-    float y{};
-    int32_t lock{-1};
-    int32_t padding{};
-};
-
-struct GPU_Edge {
-    int32_t start_node_idx{};
-    int32_t end_node_idx{};
-    int32_t next_edge_idx{};
-    float length{};
-    float max_speed{};
-    int32_t head_car_idx{-1};
-    int32_t garage_lock{-1};
-    int32_t padding1{};
-};
-
-struct GPU_Car {
-    int32_t current_edge_idx{};
-    float position{};
-    float speed{};
-    int32_t state{};
-    int32_t next_car_idx{-1};
-    int32_t padding1{};
-    int32_t padding2{};
-    int32_t padding3{};
-};
-
-struct PushData {
-    float dt{};
-    uint32_t num_cars{};
-    uint32_t num_edges{};
-    uint32_t padding{};
-};
-
-// ADDED: aspect_ratio to prevent cars from stretching when the window resizes!
-struct GraphicsPushData {
-    float camera_x{};
-    float camera_y{};
-    float zoom_level{1.0f};
-    float aspect_ratio{};
-    float extent_width{}; // Bounding box size of the city in meters
-    float extent_height{};
-    float padding1{};
-    float padding2{};
-};
+#include "common.hpp"
 
 template<typename T>
 auto loadBinaryData(const std::string &filepath) -> std::vector<T> {
@@ -163,10 +118,10 @@ private:
     std::unique_ptr<vk::raii::PipelineLayout> graphicsPipelineLayout;
     std::unique_ptr<vk::raii::Pipeline> graphicsPipeline;
     std::unique_ptr<vk::raii::Pipeline> streetPipeline;
-    GraphicsPushData mapBounds;
+    GraphicsConstants mapBounds;
 
     // --- SIMULATION CONTROLS ---
-    bool isPaused{false};
+    bool isPaused{true};
     int32_t simSpeed{1};
     bool framebufferResized{false};
 
@@ -196,7 +151,111 @@ private:
     int statEvacuated = 0;
     float statAvgSpeed = 0.0f;
 
-    // --- RECREATION LOGIC ---
+    // --- GRAPH ROUTING DATA (NEW) ---
+    struct IncomingEdge {
+        int source_node;
+        int edge_idx;
+        float travel_time;
+    };
+
+    std::vector<std::vector<IncomingEdge> > reverseGraph;
+    std::vector<std::vector<int> > forwardGraph;
+    std::vector<int> allExitNodes;
+    std::vector<bool> isExitOpen;
+
+    // --- ROUTING FUNCTIONS (NEW) ---
+    void recalculateGPS() {
+        std::println("Recalculating City-Wide GPS Routes...");
+        const auto startTime = std::chrono::high_resolution_clock::now();
+
+        // 1. Reset all edges to have no destination
+        for (auto &edge: cpuEdges) {
+            edge.next_edge_idx = -1;
+        }
+
+        std::vector<float> min_travel_time(cpuNodes.size(), std::numeric_limits<float>::max());
+        std::vector<int> next_node_to_exit(cpuNodes.size(), -1);
+
+        // Priority Queue: {travel_time, node_idx}
+        using NodeRecord = std::pair<float, int>;
+        std::priority_queue<NodeRecord, std::vector<NodeRecord>, std::greater<> > pq;
+
+        // 2. Seed the algorithm with all CURRENTLY OPEN exits
+        for (size_t i = 0; i < allExitNodes.size(); ++i) {
+            if (isExitOpen[i]) {
+                int exit_idx = allExitNodes[i];
+                min_travel_time[exit_idx] = 0.0f;
+                pq.emplace(0.0f, exit_idx);
+            }
+        }
+
+        // 3. Run Dijkstra backwards
+        while (!pq.empty()) {
+            auto [current_time, current_node] = pq.top();
+            pq.pop();
+
+            if (current_time > min_travel_time[current_node]) continue;
+
+            for (const auto &incoming: reverseGraph[current_node]) {
+                float new_time = current_time + incoming.travel_time;
+
+                if (new_time < min_travel_time[incoming.source_node]) {
+                    min_travel_time[incoming.source_node] = new_time;
+                    next_node_to_exit[incoming.source_node] = current_node;
+                    pq.emplace(new_time, incoming.source_node);
+                }
+            }
+        }
+
+        // 4. Bake the fast O(1) paths into the Edge array
+        for (int i = 0; i < totalEdges; ++i) {
+            const int end_node = cpuEdges[i].end_node_idx;
+            const int target_node = next_node_to_exit[end_node];
+
+            if (target_node != -1) {
+                for (const int j: forwardGraph[end_node]) {
+                    if (cpuEdges[j].end_node_idx == target_node) {
+                        cpuEdges[i].next_edge_idx = j;
+                        break;
+                    }
+                }
+            }
+        }
+
+        const auto endTime = std::chrono::high_resolution_clock::now();
+        const std::chrono::duration<double, std::milli> ms = endTime - startTime;
+        std::println("Dijkstra Complete in {:.2f} ms!", ms.count());
+    }
+
+    void triggerDynamicReroute() {
+        // 1. Force the GPU to finish its current frame and pause
+        device->waitIdle();
+        const bool wasPaused = isPaused;
+        isPaused = true;
+
+        // 2. Run the CPU Pathfinding
+        recalculateGPS();
+
+        // 3. Upload ONLY the newly updated cpuEdges array to VRAM
+        const vk::DeviceSize bufferSize{sizeof(GPU_Edge) * totalEdges};
+
+        auto [stagingBuffer, stagingMemory] = createBuffer(
+            bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
+        );
+
+        void *mappedData{stagingMemory->mapMemory(0, bufferSize)};
+        std::memcpy(mappedData, cpuEdges.data(), bufferSize);
+        stagingMemory->unmapMemory();
+
+        copyBuffer(*stagingBuffer, *edgeBuffer, bufferSize);
+        std::println("GPS Reroute Uploaded to VRAM!");
+
+        // 4. Resume the simulation
+        isPaused = wasPaused;
+    }
+
+    // --- VULKAN ENGINE ---
     void recreateSwapchain() {
         int width = 0, height = 0;
         glfwGetFramebufferSize(window, &width, &height);
@@ -246,9 +305,7 @@ private:
 
         vk::DescriptorPoolCreateInfo poolInfo{
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-            .maxSets = 1000,
-            .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
-            .pPoolSizes = poolSizes.data()
+            .maxSets = 1000, .poolSizeCount = static_cast<uint32_t>(poolSizes.size()), .pPoolSizes = poolSizes.data()
         };
         imguiPool = std::make_unique<vk::raii::DescriptorPool>(*device, poolInfo);
 
@@ -274,16 +331,11 @@ private:
         init_info.ImageCount = static_cast<uint32_t>(swapchainImages.size());
         init_info.Allocator = nullptr;
         init_info.CheckVkResultFn = nullptr;
-
-        // --- THE FIX: Use the new PipelineInfoMain nested struct ---
         init_info.PipelineInfoMain.RenderPass = **renderPass;
         init_info.PipelineInfoMain.Subpass = 0;
         init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
         ImGui_ImplVulkan_Init(&init_info);
-
-        // --- THE FIX: Manual font uploading is no longer required! ---
-        // ImGui now automatically uploads fonts to the GPU on the first ImGui_ImplVulkan_NewFrame() call.
     }
 
     void initWindow() {
@@ -368,20 +420,16 @@ private:
                 if (action == GLFW_PRESS) {
                     if (key == GLFW_KEY_SPACE) {
                         engine->isPaused = !engine->isPaused;
-                        std::println("Simulation {}", engine->isPaused ? "PAUSED" : "RESUMED");
                     } else if (key == GLFW_KEY_UP || key == GLFW_KEY_RIGHT) {
                         engine->simSpeed = std::min(engine->simSpeed * 2, 64);
-                        std::println("Speed: {}x", engine->simSpeed);
                     } else if (key == GLFW_KEY_DOWN || key == GLFW_KEY_LEFT) {
                         engine->simSpeed = std::max(engine->simSpeed / 2, 1);
-                        std::println("Speed: {}x", engine->simSpeed);
                     }
                 }
             });
     }
 
     void initVulkan() {
-        std::println("Initializing Vulkan RAII Context...");
         VULKAN_HPP_DEFAULT_DISPATCHER.init();
         context = std::make_unique<vk::raii::Context>();
 
@@ -561,7 +609,7 @@ private:
 
         // Initialize CPU vectors to hold the data
         cpuCars.resize(totalCars);
-        cpuEdges.resize(totalEdges);
+        cpuEdges = rawEdges;
         cpuNodes.resize(nodes.size());
 
         // Create Readback Buffers (Host Visible + Coherent so the CPU can read them)
@@ -577,6 +625,31 @@ private:
         createReadback(sizeof(GPU_Car) * totalCars, carReadbackBuffer, carReadbackMemory);
         createReadback(sizeof(GPU_Edge) * totalEdges, edgeReadbackBuffer, edgeReadbackMemory);
         createReadback(sizeof(GPU_Node) * nodes.size(), nodeReadbackBuffer, nodeReadbackMemory);
+
+        // --- NEW: BUILD ROUTING GRAPHS ---
+        reverseGraph.resize(cpuNodes.size());
+        forwardGraph.resize(cpuNodes.size());
+        std::set<int> exitNodeSet;
+
+        for (int i = 0; i < totalEdges; ++i) {
+            const GPU_Edge &edge = cpuEdges[i];
+            const float travel_time = edge.length / std::max(edge.max_speed, 0.1f);
+
+            reverseGraph[edge.end_node_idx].push_back({
+                .source_node = edge.start_node_idx,
+                .edge_idx = i,
+                .travel_time = travel_time
+            });
+            forwardGraph[edge.start_node_idx].push_back(i);
+
+            // Dynamically detect exits!
+            if (edge.next_edge_idx == -1) {
+                exitNodeSet.insert(edge.end_node_idx);
+            }
+        }
+
+        allExitNodes.assign(exitNodeSet.begin(), exitNodeSet.end());
+        isExitOpen.resize(allExitNodes.size(), true);
     }
 
     void createComputePipeline() {
@@ -621,7 +694,7 @@ private:
         computeDescriptorSetLayout = std::make_unique<vk::raii::DescriptorSetLayout>(*device, layoutInfo);
 
         constexpr vk::PushConstantRange pushConstantRange{
-            .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(PushData)
+            .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(PushConstants)
         };
 
         const vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
@@ -692,8 +765,7 @@ private:
         if (!surface) {
             VkSurfaceKHR c_surface;
             if (glfwCreateWindowSurface(**instance, window, nullptr, &c_surface) != VK_SUCCESS)
-                throw std::runtime_error
-                        {"Failed to create window surface!"};
+                throw std::runtime_error{"Failed to create window surface!"};
             surface = std::make_unique<vk::raii::SurfaceKHR>(*instance, c_surface);
         }
 
@@ -842,7 +914,7 @@ private:
         };
 
         constexpr vk::PushConstantRange pushRange{
-            .stageFlags = vk::ShaderStageFlagBits::eAllGraphics, .offset = 0, .size = sizeof(GraphicsPushData)
+            .stageFlags = vk::ShaderStageFlagBits::eAllGraphics, .offset = 0, .size = sizeof(GraphicsConstants)
         };
         const vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
             .setLayoutCount = 1, .pSetLayouts = &(**computeDescriptorSetLayout), .pushConstantRangeCount = 1,
@@ -936,6 +1008,74 @@ private:
                         ImGui::GetIO().Framerate);
             ImGui::Separator();
 
+            // ==========================================
+            // --- EMERGENCY SCENARIO CONTROL ---
+            // ==========================================
+            ImGui::Separator();
+            ImGui::Text("--- EMERGENCY SCENARIO CONTROL ---");
+
+            bool routingChanged = false;
+
+            ImGui::Text("Bulk Closures (Attack Direction)");
+
+            if (ImGui::Button("Close North Exits")) {
+                for (size_t i = 0; i < allExitNodes.size(); ++i) {
+                    if (cpuNodes[allExitNodes[i]].y > mapBounds.camera_y) isExitOpen[i] = false;
+                }
+                routingChanged = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Close South Exits")) {
+                for (size_t i = 0; i < allExitNodes.size(); ++i) {
+                    if (cpuNodes[allExitNodes[i]].y < mapBounds.camera_y) isExitOpen[i] = false;
+                }
+                routingChanged = true;
+            }
+
+            if (ImGui::Button("Close East Exits")) {
+                for (size_t i = 0; i < allExitNodes.size(); ++i) {
+                    if (cpuNodes[allExitNodes[i]].x > mapBounds.camera_x) isExitOpen[i] = false;
+                }
+                routingChanged = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Close West Exits")) {
+                for (size_t i = 0; i < allExitNodes.size(); ++i) {
+                    if (cpuNodes[allExitNodes[i]].x < mapBounds.camera_x) isExitOpen[i] = false;
+                }
+                routingChanged = true;
+            }
+
+            if (ImGui::Button("Re-open All Exits")) {
+                std::ranges::fill(isExitOpen, true);
+                routingChanged = true;
+            }
+
+            ImGui::Spacing();
+
+            if (ImGui::CollapsingHeader("Individual Exit Nodes")) {
+                ImGui::BeginChild("ExitList", ImVec2(0, 150), true);
+                for (size_t i = 0; i < allExitNodes.size(); ++i) {
+                    // Prevent crash if we haven't snapshotted nodes yet
+                    float x = cpuNodes.empty() ? 0.0f : cpuNodes[allExitNodes[i]].x;
+                    float y = cpuNodes.empty() ? 0.0f : cpuNodes[allExitNodes[i]].y;
+                    std::string label = std::format("Exit Node #{} (X: {:.0f}, Y: {:.0f})", allExitNodes[i], x, y);
+
+                    bool isOpen = isExitOpen[i];
+                    if (ImGui::Checkbox(label.c_str(), &isOpen)) {
+                        isExitOpen[i] = isOpen;
+                        routingChanged = true;
+                    }
+                }
+                ImGui::EndChild();
+            }
+
+            if (routingChanged) {
+                triggerDynamicReroute();
+            }
+            // ==========================================
+
+            ImGui::Separator();
             if (ImGui::Button(isPaused ? "Resume Simulation" : "Pause Simulation")) {
                 isPaused = !isPaused;
             }
@@ -974,10 +1114,10 @@ private:
                 ImGui::Text("--- CAR %d ---", selectedCarId);
 
                 const char *stateStr = "Unknown";
-                if (car.state == 0) stateStr = "Driving";
-                if (car.state == 1) stateStr = "Queuing at Intersection";
-                if (car.state == 2) stateStr = "Evacuated!";
-                if (car.state == 3) stateStr = "In Garage";
+                if (car.state == CarState::Driving) stateStr = "Driving";
+                if (car.state == CarState::Queuing) stateStr = "Queuing at Intersection";
+                if (car.state == CarState::Evacuated) stateStr = "Evacuated!";
+                if (car.state == CarState::Garage) stateStr = "In Garage";
 
                 ImGui::Text("State: %s (%d)", stateStr, car.state);
                 ImGui::Text("Speed: %.2f m/s (%.1f km/h)", car.speed, car.speed * 3.6f);
@@ -1007,17 +1147,14 @@ private:
             // --- 3. FINALIZE UI DATA ---
             ImGui::Render();
 
-            // --- VULKAN COMMAND RECORDING ---
-            constexpr vk::CommandBufferBeginInfo cmdBeginInfo{
-                .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
-            };
+            constexpr vk::CommandBufferBeginInfo cmdBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
             cmd.begin(cmdBeginInfo);
 
             if (!isPaused) {
                 cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, **computePipelineLayout, 0,
                                        {*computeDescriptorSets[0]}, nullptr);
-                const PushData pushData{.dt = 0.1f, .num_cars = totalCars, .num_edges = totalEdges};
-                cmd.pushConstants<PushData>(**computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, pushData);
+                const PushConstants pushData{.dt = 0.1f, .num_cars = totalCars, .num_edges = totalEdges};
+                cmd.pushConstants<PushConstants>(**computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, pushData);
 
                 for (int32_t step = 0; step < simSpeed; ++step) {
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, **clearEdgesPipeline);
@@ -1066,7 +1203,6 @@ private:
             };
             cmd.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
 
-            // --- THE FIX: Bind the graphics pipeline and push camera constants FIRST ---
             cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **streetPipeline);
 
             // Set Dynamic Viewport & Scissor
@@ -1078,10 +1214,9 @@ private:
             const vk::Rect2D dynamicScissor{.offset = {0, 0}, .extent = swapchainExtent};
             cmd.setScissor(0, dynamicScissor);
 
-            // Push the Camera Data (This only affects your pipelines, not ImGui!)
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, **graphicsPipelineLayout, 0,
                                    {*computeDescriptorSets[0]}, nullptr);
-            cmd.pushConstants<GraphicsPushData>(**graphicsPipelineLayout, vk::ShaderStageFlagBits::eAllGraphics, 0,
+            cmd.pushConstants<GraphicsConstants>(**graphicsPipelineLayout, vk::ShaderStageFlagBits::eAllGraphics, 0,
                                                 mapBounds);
 
             // Draw the Map
@@ -1126,10 +1261,6 @@ private:
 
             queue->waitIdle();
         }
-
-        // --- THE SHUTDOWN FIX ---
-        // Force the CPU to wait until the GPU is completely finished drawing the last frame
-        // BEFORE destroying the objects
         device->waitIdle();
     }
 
@@ -1171,20 +1302,18 @@ private:
         std::memcpy(cpuNodes.data(), mappedNodes, sizeof(GPU_Node) * cpuNodes.size());
         nodeReadbackMemory->unmapMemory();
 
-        std::println("Snapshot downloaded from VRAM to RAM!");
-
         statGarage = 0;
         statRoad = 0;
         statEvacuated = 0;
         double totalSpeed = 0.0;
 
         for (const auto &car: cpuCars) {
-            if (car.state == 0 || car.state == 1) {
+            if (car.state == CarState::Driving || car.state == CarState::Queuing) {
                 statRoad++;
                 totalSpeed += car.speed;
-            } else if (car.state == 2) {
+            } else if (car.state == CarState::Evacuated) {
                 statEvacuated++;
-            } else if (car.state == 3) {
+            } else if (car.state == CarState::Garage) {
                 statGarage++;
             }
         }
@@ -1221,7 +1350,7 @@ private:
             const GPU_Car &car = cpuCars[i];
 
             // Only select cars that are actually on the road
-            if (car.state >= 2 || car.current_edge_idx == -1) continue;
+            if (car.state == CarState::Driving || car.state ==CarState::Queuing || car.current_edge_idx == -1) continue;
 
             const GPU_Edge &edge = cpuEdges[car.current_edge_idx];
             const GPU_Node &startNode = cpuNodes[edge.start_node_idx];
