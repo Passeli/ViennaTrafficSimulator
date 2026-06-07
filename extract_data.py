@@ -3,7 +3,6 @@ import geopandas as gpd
 import networkx as nx
 import json
 import struct
-import pandas as pd
 
 # ==========================================
 # 1. SETUP & MAP DOWNLOAD
@@ -11,7 +10,7 @@ import pandas as pd
 print("1. Loading Vienna Polygon and downloading street network...")
 apocalypse_filter = (
     '["area"!~"yes"]'
-    '["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|service|living_street|track"]'
+    '["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|service|living_street|track|construction"]'
 )
 
 # Load the polygon you created
