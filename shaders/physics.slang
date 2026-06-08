@@ -87,16 +87,17 @@ void main(uint3 threadId: SV_DispatchThreadID) {
       // Official Intelligent Driver Model (IDM)
       float speed_diff = is_lead_car ? car.speed : (car.speed - front_speed);
 
-      // Snappy parameters for static stop lines vs safe parameters for followers
-      // T is safe time headway (seconds)
+      // Snappy parameters for static stop lines vs safe parameters for
+      // followers T is safe time headway (seconds)
       float T = is_lead_car ? 0.6 : TIME_GAP;
       // denom is 2 * sqrt(a * b) where desired acceleration a = 1.5 m/s^2.
       // Lead cars: b = 3.5 m/s^2 (firm braking) -> 2 * sqrt(1.5 * 3.5) = 4.5825
-      // Followers: b = 2.0 m/s^2 (comfortable braking) -> 2 * sqrt(1.5 * 2.0) = 3.4641
+      // Followers: b = 2.0 m/s^2 (comfortable braking) -> 2 * sqrt(1.5 * 2.0)
+      // = 3.4641
       float denom = is_lead_car ? 4.5825 : 3.4641;
 
-      float dynamic_gap = target_gap + (car.speed * T) +
-                          (car.speed * speed_diff) / denom;
+      float dynamic_gap =
+          target_gap + (car.speed * T) + (car.speed * speed_diff) / denom;
       dynamic_gap = max(dynamic_gap, target_gap);
 
       float speed_ratio = car.speed / edge.max_speed;
@@ -205,5 +206,55 @@ void main(uint3 threadId: SV_DispatchThreadID) {
       }
     }
   }
+
+  // ==========================================
+  // PHASE 4: STUCK CAR STATE (CarState::Stuck)
+  // ==========================================
+  else if (car.state == CarState::Stuck) {
+    if (car.position >= edge.length - 0.1) {
+      bool target_is_open_exit =
+          (nodes[edge.end_node_idx].type == NodeType::OpenExit);
+      bool target_is_blind = (nodes[edge.end_node_idx].type == NodeType::Blind);
+      if (!target_is_blind &&
+          (edge.next_edge_idx != -1 || target_is_open_exit)) {
+        car.state = CarState::Queuing;
+      }
+    } else {
+      float front_distance = edge.length - car.position;
+      bool is_lead_car = true;
+      int closest_front_car_id = -1;
+
+      int current_search_id = edge.head_car_idx;
+      while (current_search_id != -1) {
+        if ((uint)current_search_id != id) {
+          Car other_car = cars[current_search_id];
+          if (other_car.current_edge_idx == car.current_edge_idx) {
+            if (other_car.state == CarState::Driving ||
+                other_car.state == CarState::Queuing ||
+                other_car.state == CarState::Stuck) {
+              float dist_to_other_front = other_car.position - car.position;
+              if (dist_to_other_front > 0.0 || (dist_to_other_front == 0.0 &&
+                                                (uint)current_search_id > id)) {
+                float true_gap = dist_to_other_front - CAR_LENGTH;
+                if (true_gap < front_distance) {
+                  front_distance = true_gap;
+                  is_lead_car = false;
+                  closest_front_car_id = current_search_id;
+                }
+              }
+            }
+          }
+        }
+        current_search_id = cars[current_search_id].next_car_idx;
+      }
+
+      if (is_lead_car ||
+          (closest_front_car_id != -1 &&
+           cars[closest_front_car_id].state != CarState::Stuck)) {
+        car.state = CarState::Driving;
+      }
+    }
+  }
+
   cars[id] = car;
 }

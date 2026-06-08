@@ -133,6 +133,18 @@ private:
     double lastMouseX{0.0};
     double lastMouseY{0.0};
 
+    // --- MARQUEE SELECTION STATE ---
+    bool isSelecting{false};
+    double startMouseX{0.0};
+    double startMouseY{0.0};
+    double currentMouseX{0.0};
+    double currentMouseY{0.0};
+
+    // --- INSPECT STATE ---
+    bool isInspecting{false};
+    double inspectMouseX{0.0};
+    double inspectMouseY{0.0};
+
     // --- CPU SHADOW COPIES ---
     std::vector<GPU_Car> cpuCars;
     std::vector<GPU_Edge> cpuEdges;
@@ -421,38 +433,58 @@ private:
 
             auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
 
-            // Left Click = Pan the Map
             if (button == GLFW_MOUSE_BUTTON_LEFT) {
                 if (action == GLFW_PRESS) {
-                    engine->isDragging = true;
-                    glfwGetCursorPos(win, &engine->lastMouseX, &engine->lastMouseY);
+                    if (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                        glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
+                        engine->isSelecting = true;
+                        glfwGetCursorPos(win, &engine->startMouseX, &engine->startMouseY);
+                        engine->currentMouseX = engine->startMouseX;
+                        engine->currentMouseY = engine->startMouseY;
+                    } else {
+                        engine->isDragging = true;
+                        glfwGetCursorPos(win, &engine->lastMouseX, &engine->lastMouseY);
+                    }
                 } else if (action == GLFW_RELEASE) {
+                    if (engine->isSelecting) {
+                        engine->isSelecting = false;
+                        engine->applyMarqueeSelection();
+                    }
                     engine->isDragging = false;
                 }
             }
 
             // Right Click = Inspect Car
-            if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
-                double mouseX, mouseY;
-                glfwGetCursorPos(win, &mouseX, &mouseY);
+            if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+                if (action == GLFW_PRESS) {
+                    engine->isInspecting = true;
+                    glfwGetCursorPos(win, &engine->inspectMouseX, &engine->inspectMouseY);
 
-                float worldX, worldY;
-                engine->screenToWorld(mouseX, mouseY, worldX, worldY);
-                engine->takeSnapshot();
-                engine->selectClosestCar(worldX, worldY);
+                    float worldX, worldY;
+                    engine->screenToWorld(engine->inspectMouseX, engine->inspectMouseY, worldX, worldY);
+                    engine->takeSnapshot();
+                    engine->selectClosestCar(worldX, worldY);
+                } else if (action == GLFW_RELEASE) {
+                    engine->isInspecting = false;
+                }
             }
         });
 
-        // C. CURSOR POSITION CALLBACK (PANNING THE MAP)
+        // C. CURSOR POSITION CALLBACK (PANNING THE MAP / UPDATING MARQUEE)
         glfwSetCursorPosCallback(window, [](GLFWwindow *win, const double xpos, const double ypos) {
-            // (We don't need the ImGui check here because isDragging won't be true if the press was blocked above!)
             auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
-            if (engine->isDragging) {
+            if (engine->isSelecting) {
+                engine->currentMouseX = xpos;
+                engine->currentMouseY = ypos;
+            } else if (engine->isInspecting) {
+                engine->inspectMouseX = xpos;
+                engine->inspectMouseY = ypos;
+            } else if (engine->isDragging) {
                 const double deltaX = xpos - engine->lastMouseX;
                 const double deltaY = ypos - engine->lastMouseY;
 
-                const float screenFactorX = (engine->mapBounds.extent_width / static_cast<float>(engine->WIDTH));
-                const float screenFactorY = (engine->mapBounds.extent_height / static_cast<float>(engine->HEIGHT));
+                const float screenFactorX = (engine->mapBounds.extent_width / static_cast<float>(engine->swapchainExtent.width));
+                const float screenFactorY = (engine->mapBounds.extent_height / static_cast<float>(engine->swapchainExtent.height));
 
                 engine->mapBounds.camera_x -= static_cast<float>(deltaX) * (
                     screenFactorX / engine->mapBounds.zoom_level);
@@ -474,6 +506,9 @@ private:
                 if (action == GLFW_PRESS) {
                     if (key == GLFW_KEY_SPACE) {
                         engine->isPaused = !engine->isPaused;
+                        if (engine->isPaused) {
+                            engine->takeSnapshot();
+                        }
                     } else if (key == GLFW_KEY_UP || key == GLFW_KEY_RIGHT) {
                         engine->simSpeed = std::min(engine->simSpeed * 2, 256);
                     } else if (key == GLFW_KEY_DOWN || key == GLFW_KEY_LEFT) {
@@ -880,6 +915,9 @@ private:
             };
             swapchainImageViews.emplace_back(*device, viewInfo);
         }
+
+        // Update aspect ratio for rendering
+        mapBounds.aspect_ratio = static_cast<float>(swapchainExtent.width) / static_cast<float>(swapchainExtent.height);
     }
 
     void createRenderPass() {
@@ -1102,12 +1140,30 @@ private:
                 }
             }
 
-            // Read back the selected car's updated data from the previous frame's copy
+            // Read back the selected car's updated data, and its current edge/node, from the previous frame's copy
             if (!isPaused && selectedCarId >= 0 && selectedCarId < static_cast<int>(totalCars) && !cpuCars.empty()) {
-                const vk::DeviceSize offset = sizeof(GPU_Car) * selectedCarId;
-                const void *mappedData = carReadbackMemory->mapMemory(offset, sizeof(GPU_Car));
-                std::memcpy(&cpuCars[selectedCarId], mappedData, sizeof(GPU_Car));
-                carReadbackMemory->unmapMemory();
+                {
+                    const vk::DeviceSize offset = sizeof(GPU_Car) * selectedCarId;
+                    const void *mappedData = carReadbackMemory->mapMemory(offset, sizeof(GPU_Car));
+                    std::memcpy(&cpuCars[selectedCarId], mappedData, sizeof(GPU_Car));
+                    carReadbackMemory->unmapMemory();
+                }
+
+                const int edgeIdx = cpuCars[selectedCarId].current_edge_idx;
+                if (edgeIdx >= 0 && edgeIdx < static_cast<int>(totalEdges)) {
+                    const vk::DeviceSize offset = sizeof(GPU_Edge) * edgeIdx;
+                    const void *mappedData = edgeReadbackMemory->mapMemory(offset, sizeof(GPU_Edge));
+                    std::memcpy(&cpuEdges[edgeIdx], mappedData, sizeof(GPU_Edge));
+                    edgeReadbackMemory->unmapMemory();
+
+                    const int nodeIdx = cpuEdges[edgeIdx].end_node_idx;
+                    if (nodeIdx >= 0 && nodeIdx < static_cast<int>(cpuNodes.size())) {
+                        const vk::DeviceSize offset = sizeof(GPU_Node) * nodeIdx;
+                        const void *mappedData = nodeReadbackMemory->mapMemory(offset, sizeof(GPU_Node));
+                        std::memcpy(&cpuNodes[nodeIdx], mappedData, sizeof(GPU_Node));
+                        nodeReadbackMemory->unmapMemory();
+                    }
+                }
             }
 
             // --- THE FIX: Recreate the swapchain when the window resizes ---
@@ -1150,59 +1206,21 @@ private:
 
             bool routingChanged = false;
 
-            ImGui::Text("Bulk Closures (Attack Direction)");
 
-            if (ImGui::Button("Close North Exits")) {
-                for (size_t i = 0; i < allExitNodes.size(); ++i) {
-                    if (cpuNodes[allExitNodes[i]].y > mapBounds.camera_y) isExitOpen[i] = false;
-                }
-                routingChanged = true;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Close South Exits")) {
-                for (size_t i = 0; i < allExitNodes.size(); ++i) {
-                    if (cpuNodes[allExitNodes[i]].y < mapBounds.camera_y) isExitOpen[i] = false;
-                }
-                routingChanged = true;
-            }
 
-            if (ImGui::Button("Close East Exits")) {
-                for (size_t i = 0; i < allExitNodes.size(); ++i) {
-                    if (cpuNodes[allExitNodes[i]].x > mapBounds.camera_x) isExitOpen[i] = false;
-                }
-                routingChanged = true;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Close West Exits")) {
-                for (size_t i = 0; i < allExitNodes.size(); ++i) {
-                    if (cpuNodes[allExitNodes[i]].x < mapBounds.camera_x) isExitOpen[i] = false;
-                }
-                routingChanged = true;
-            }
-
-            if (ImGui::Button("Re-open All Exits")) {
+            if (ImGui::Button("Open All Exits")) {
                 std::ranges::fill(isExitOpen, true);
+                routingChanged = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Close All Exits")) {
+                std::ranges::fill(isExitOpen, false);
                 routingChanged = true;
             }
 
             ImGui::Spacing();
 
-            if (ImGui::CollapsingHeader("Individual Exit Nodes")) {
-                ImGui::BeginChild("ExitList", ImVec2(0, 150), true);
-                for (size_t i = 0; i < allExitNodes.size(); ++i) {
-                    // Prevent crash if we haven't snapshotted nodes yet
-                    float x = cpuNodes.empty() ? 0.0f : cpuNodes[allExitNodes[i]].x;
-                    float y = cpuNodes.empty() ? 0.0f : cpuNodes[allExitNodes[i]].y;
-                    std::string label = std::format("Exit Node #{} (X: {:.0f}, Y: {:.0f})", allExitNodes[i], x, y);
 
-                    bool isOpen = isExitOpen[i];
-                    if (ImGui::Checkbox(label.c_str(), &isOpen)) {
-                        isExitOpen[i] = isOpen;
-                        routingChanged = true;
-                    }
-                }
-                ImGui::EndChild();
-            }
 
             if (routingChanged) {
                 triggerDynamicReroute();
@@ -1212,6 +1230,9 @@ private:
             ImGui::Separator();
             if (ImGui::Button(isPaused ? "Resume Simulation" : "Pause Simulation")) {
                 isPaused = !isPaused;
+                if (isPaused) {
+                    takeSnapshot();
+                }
             }
             ImGui::SliderInt("Simulation Speed", &simSpeed, 1, 256, "%d x");
 
@@ -1236,8 +1257,6 @@ private:
 
             if (!cpuCars.empty()) {
                 ImGui::Spacing();
-                // Allow the user to type in a Car ID to inspect
-                ImGui::InputInt("Inspect Car ID", &selectedCarId);
                 selectedCarId = std::clamp(selectedCarId, 0, static_cast<int>(totalCars) - 1);
 
                 GPU_Car &car = cpuCars[selectedCarId];
@@ -1269,13 +1288,32 @@ private:
                     ImGui::Text("Head Car ID: %d", edge.head_car_idx);
                     ImGui::Text("Target Node ID: %d", edge.end_node_idx);
                     ImGui::EndChild();
-
-                    // Show the node data (Intersection Lock)
-                    GPU_Node &node = cpuNodes[edge.end_node_idx];
-                    ImGui::Text("Target Node Lock: %d", node.lock);
                 }
             }
             ImGui::End();
+
+            if (isSelecting) {
+                ImDrawList* drawList = ImGui::GetForegroundDrawList();
+                ImVec2 p_min(
+                    static_cast<float>(std::min(startMouseX, currentMouseX)),
+                    static_cast<float>(std::min(startMouseY, currentMouseY))
+                );
+                ImVec2 p_max(
+                    static_cast<float>(std::max(startMouseX, currentMouseX)),
+                    static_cast<float>(std::max(startMouseY, currentMouseY))
+                );
+                drawList->AddRectFilled(p_min, p_max, IM_COL32(0, 150, 255, 60), 4.0f);
+                drawList->AddRect(p_min, p_max, IM_COL32(0, 150, 255, 255), 4.0f, 0, 2.0f);
+            }
+
+            if (isInspecting) {
+                ImDrawList* drawList = ImGui::GetForegroundDrawList();
+                ImVec2 center(static_cast<float>(inspectMouseX), static_cast<float>(inspectMouseY));
+                float r = worldDistanceToPixels(20.0f / 111300.0f); // 20 meters selection radius in degrees
+                drawList->AddCircleFilled(center, r, IM_COL32(255, 165, 0, 40), 64);
+                drawList->AddCircle(center, r, IM_COL32(255, 165, 0, 180), 64, 2.0f);
+            }
+
 
             // --- 3. FINALIZE UI DATA ---
             ImGui::Render();
@@ -1344,9 +1382,19 @@ private:
                                         nullptr);
                 }
 
-                // Copy the selected car's data back to the host visible buffer for dynamic inspection
+                // Copy the selected car's, its edge's, and target node's data back to the host visible buffer for dynamic inspection
+                int inspectEdgeIdx = -1;
+                int inspectNodeIdx = -1;
+                if (selectedCarId >= 0 && selectedCarId < static_cast<int>(totalCars) && !cpuCars.empty()) {
+                    inspectEdgeIdx = cpuCars[selectedCarId].current_edge_idx;
+                    if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<int>(totalEdges)) {
+                        inspectNodeIdx = cpuEdges[inspectEdgeIdx].end_node_idx;
+                    }
+                }
+
+                std::vector<vk::BufferMemoryBarrier> barriers;
                 if (selectedCarId >= 0 && selectedCarId < static_cast<int>(totalCars)) {
-                    const vk::BufferMemoryBarrier transferBarrier{
+                    barriers.push_back(vk::BufferMemoryBarrier{
                         .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
                         .dstAccessMask = vk::AccessFlagBits::eTransferRead,
                         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -1354,16 +1402,65 @@ private:
                         .buffer = **carBuffer,
                         .offset = sizeof(GPU_Car) * selectedCarId,
                         .size = sizeof(GPU_Car)
-                    };
-                    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
-                                        vk::PipelineStageFlagBits::eTransfer, {}, nullptr, transferBarrier, nullptr);
+                    });
+                }
+                if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<int>(totalEdges)) {
+                    barriers.push_back(vk::BufferMemoryBarrier{
+                        .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+                        .dstAccessMask = vk::AccessFlagBits::eTransferRead,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .buffer = **edgeBuffer,
+                        .offset = sizeof(GPU_Edge) * inspectEdgeIdx,
+                        .size = sizeof(GPU_Edge)
+                    });
+                }
+                if (inspectNodeIdx >= 0 && inspectNodeIdx < static_cast<int>(cpuNodes.size())) {
+                    barriers.push_back(vk::BufferMemoryBarrier{
+                        .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+                        .dstAccessMask = vk::AccessFlagBits::eTransferRead,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .buffer = **nodeBuffer,
+                        .offset = sizeof(GPU_Node) * inspectNodeIdx,
+                        .size = sizeof(GPU_Node)
+                    });
+                }
 
+                if (!barriers.empty()) {
+                    cmd.pipelineBarrier(
+                        vk::PipelineStageFlagBits::eComputeShader,
+                        vk::PipelineStageFlagBits::eTransfer,
+                        {},
+                        nullptr,
+                        barriers,
+                        nullptr
+                    );
+                }
+
+                if (selectedCarId >= 0 && selectedCarId < static_cast<int>(totalCars)) {
                     const vk::BufferCopy copyRegion{
                         .srcOffset = sizeof(GPU_Car) * selectedCarId,
                         .dstOffset = sizeof(GPU_Car) * selectedCarId,
                         .size = sizeof(GPU_Car)
                     };
                     cmd.copyBuffer(**carBuffer, **carReadbackBuffer, copyRegion);
+                }
+                if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<int>(totalEdges)) {
+                    const vk::BufferCopy copyRegion{
+                        .srcOffset = sizeof(GPU_Edge) * inspectEdgeIdx,
+                        .dstOffset = sizeof(GPU_Edge) * inspectEdgeIdx,
+                        .size = sizeof(GPU_Edge)
+                    };
+                    cmd.copyBuffer(**edgeBuffer, **edgeReadbackBuffer, copyRegion);
+                }
+                if (inspectNodeIdx >= 0 && inspectNodeIdx < static_cast<int>(cpuNodes.size())) {
+                    const vk::BufferCopy copyRegion{
+                        .srcOffset = sizeof(GPU_Node) * inspectNodeIdx,
+                        .dstOffset = sizeof(GPU_Node) * inspectNodeIdx,
+                        .size = sizeof(GPU_Node)
+                    };
+                    cmd.copyBuffer(**nodeBuffer, **nodeReadbackBuffer, copyRegion);
                 }
             }
 
@@ -1387,6 +1484,7 @@ private:
 
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, **graphicsPipelineLayout, 0,
                                    {*computeDescriptorSets[0]}, nullptr);
+            mapBounds.selected_car_id = selectedCarId;
             cmd.pushConstants<GraphicsConstants>(**graphicsPipelineLayout, vk::ShaderStageFlagBits::eAllGraphics, 0,
                                                  mapBounds);
 
@@ -1500,9 +1598,9 @@ private:
     // Converts raw GLFW window pixels into Vienna World Coordinates (Meters)
     void screenToWorld(const double screenX, const double screenY, float &outWorldX, float &outWorldY) const {
         // 1. Convert Screen Pixels to Normalized Device Coordinates (NDC: -1.0 to 1.0)
-        float ndcX = (static_cast<float>(screenX) / static_cast<float>(WIDTH)) * 2.0f - 1.0f;
+        float ndcX = (static_cast<float>(screenX) / static_cast<float>(swapchainExtent.width)) * 2.0f - 1.0f;
         // Vulkan's Y axis points down, but our world map points up, so we invert Y
-        const float ndcY = -((static_cast<float>(screenY) / static_cast<float>(HEIGHT)) * 2.0f - 1.0f);
+        const float ndcY = -((static_cast<float>(screenY) / static_cast<float>(swapchainExtent.height)) * 2.0f - 1.0f);
 
         // 2. Reverse the Aspect Ratio correction
         ndcX *= mapBounds.aspect_ratio;
@@ -1516,11 +1614,33 @@ private:
         outWorldY = localY + mapBounds.camera_y;
     }
 
+    float worldDistanceToPixels(float distanceMeters) const {
+        return (distanceMeters * mapBounds.zoom_level * swapchainExtent.height) / mapBounds.extent_width;
+    }
+
+    void worldToScreen(const float worldX, const float worldY, float &outScreenX, float &outScreenY) const {
+        // 1. Apply Camera Pan
+        float localX = worldX - mapBounds.camera_x;
+        float localY = worldY - mapBounds.camera_y;
+
+        // 2. Apply Zoom and Extent scaling
+        float ndcX = (localX * mapBounds.zoom_level) / (mapBounds.extent_width * 0.5f);
+        float ndcY = (localY * mapBounds.zoom_level) / (mapBounds.extent_height * 0.5f);
+
+        // 3. Apply Aspect Ratio correction
+        ndcX /= mapBounds.aspect_ratio;
+
+        // 4. Convert NDC (-1.0 to 1.0) to Screen Pixels
+        outScreenX = (ndcX + 1.0f) * 0.5f * static_cast<float>(swapchainExtent.width);
+        // Invert Y because screen pixels Y points down but NDC Y points up
+        outScreenY = (-ndcY + 1.0f) * 0.5f * static_cast<float>(swapchainExtent.height);
+    }
+
     void selectClosestCar(const float worldX, const float worldY) {
         if (cpuCars.empty()) return; // Must take a snapshot first!
 
+        int closestCarId = -1;
         float closestDistSq = std::numeric_limits<float>::max();
-        int bestCarId = -1;
 
         for (size_t i = 0; i < cpuCars.size(); ++i) {
             const GPU_Car &car = cpuCars[i];
@@ -1543,21 +1663,80 @@ private:
             const float dy = carWorldY - worldY;
             const float distSq = (dx * dx) + (dy * dy);
 
+            // Find the absolute closest car
             if (distSq < closestDistSq) {
                 closestDistSq = distSq;
-                bestCarId = static_cast<int>(i);
+                closestCarId = static_cast<int>(i);
             }
         }
 
         // If we clicked reasonably close to a car (e.g., within 20 meters), select it!
-        if (bestCarId != -1 && closestDistSq < 400.0f) {
-            selectedCarId = bestCarId;
+        const float thresholdDegrees = 20.0f / 111300.0f;
+        if (closestCarId != -1 && closestDistSq < thresholdDegrees * thresholdDegrees) {
+            selectedCarId = closestCarId;
             std::println("Selected Car ID: {}", selectedCarId);
+        }
+    }
+
+    void applyMarqueeSelection() {
+        if (cpuNodes.empty() || allExitNodes.empty()) return;
+
+        float startWorldX, startWorldY;
+        float currentWorldX, currentWorldY;
+        screenToWorld(startMouseX, startMouseY, startWorldX, startWorldY);
+        screenToWorld(currentMouseX, currentMouseY, currentWorldX, currentWorldY);
+
+        const double dragDistX = std::abs(startMouseX - currentMouseX);
+        const double dragDistY = std::abs(startMouseY - currentMouseY);
+
+        if (dragDistX < 4.0 && dragDistY < 4.0) {
+            int closestExitIdx = -1;
+            float closestDistSq = std::numeric_limits<float>::max();
+
+            for (size_t i = 0; i < allExitNodes.size(); ++i) {
+                float ex = cpuNodes[allExitNodes[i]].x;
+                float ey = cpuNodes[allExitNodes[i]].y;
+                float dx = ex - startWorldX;
+                float dy = ey - startWorldY;
+                float distSq = (dx * dx) + (dy * dy);
+                if (distSq < closestDistSq) {
+                    closestDistSq = distSq;
+                    closestExitIdx = static_cast<int>(i);
+                }
+            }
+
+            const float thresholdDegrees = 50.0f / 111300.0f;
+            if (closestExitIdx != -1 && closestDistSq < thresholdDegrees * thresholdDegrees) {
+                isExitOpen[closestExitIdx] = !isExitOpen[closestExitIdx];
+                triggerDynamicReroute();
+            }
+            return;
+        }
+
+        float minX = std::min(startWorldX, currentWorldX);
+        float maxX = std::max(startWorldX, currentWorldX);
+        float minY = std::min(startWorldY, currentWorldY);
+        float maxY = std::max(startWorldY, currentWorldY);
+
+        bool changed = false;
+        for (size_t i = 0; i < allExitNodes.size(); ++i) {
+            float x = cpuNodes[allExitNodes[i]].x;
+            float y = cpuNodes[allExitNodes[i]].y;
+
+            if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
+                isExitOpen[i] = !isExitOpen[i];
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            triggerDynamicReroute();
         }
     }
 };
 
 auto main() -> int32_t {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     try {
         EvacuationEngine engine{};
         engine.run();

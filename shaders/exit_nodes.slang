@@ -18,8 +18,8 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
   const Edge edge = edges[instanceID];
   const Node n = nodes[edge.end_node_idx];
 
-  // If not an exit node or blind node, collapse and return
-  if (n.type != NodeType::OpenExit && n.type != NodeType::ClosedExit && n.type != NodeType::Blind) {
+  // If not an exit node, collapse and return (blind nodes are not drawn)
+  if (n.type != NodeType::OpenExit && n.type != NodeType::ClosedExit) {
     VertexOutput output;
     output.position = float4(2.0, 2.0, 0.0, 1.0);
     output.color = float3(0.0, 0.0, 0.0);

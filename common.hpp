@@ -61,8 +61,8 @@ struct GraphicsConstants {
     float aspect_ratio = 1.0f;
     float extent_width = 0.0f;
     float extent_height = 0.0f;
-    int32_t padding0 = 0;
-    int32_t padding1 = 0;
+    int32_t selected_car_id = -1;
+    int32_t padding = 0;
 };
 
 #endif // BA_COMMON_HPP

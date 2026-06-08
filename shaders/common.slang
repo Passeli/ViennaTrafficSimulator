@@ -51,6 +51,6 @@ struct GraphicsConstants {
   float aspect_ratio;
   float extent_width;
   float extent_height;
-  int padding0;
-  int padding1;
+  int selected_car_id;
+  int padding;
 };
