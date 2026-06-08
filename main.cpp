@@ -174,6 +174,22 @@ private:
         std::println("Recalculating City-Wide GPS Routes...");
         const auto startTime = std::chrono::high_resolution_clock::now();
 
+        // 0. Count cars and detect stuck cars on each edge
+        std::vector<int> edge_car_counts(totalEdges, 0);
+        std::vector<bool> edge_has_stuck(totalEdges, false);
+        if (!cpuCars.empty()) {
+            for (const auto &car: cpuCars) {
+                if (car.state == CarState::Driving || car.state == CarState::Queuing || car.state == CarState::Stuck) {
+                    if (car.current_edge_idx >= 0 && car.current_edge_idx < static_cast<int>(totalEdges)) {
+                        edge_car_counts[car.current_edge_idx]++;
+                        if (car.state == CarState::Stuck) {
+                            edge_has_stuck[car.current_edge_idx] = true;
+                        }
+                    }
+                }
+            }
+        }
+
         // 1. Reset all edges to have no destination, and update exit edge padding
         for (auto &edge: cpuEdges) {
             edge.next_edge_idx = -1;
@@ -209,7 +225,19 @@ private:
             if (current_time > min_travel_time[current_node]) continue;
 
             for (const auto &incoming: reverseGraph[current_node]) {
-                float new_time = current_time + incoming.travel_time;
+                float travel_time = incoming.travel_time;
+                if (!cpuCars.empty()) {
+                    if (edge_has_stuck[incoming.edge_idx]) {
+                        travel_time = 1e6f; // Blocked street penalty
+                    } else {
+                        // Estimate edge vehicle capacity based on 5.0 meters per car
+                        const float capacity = std::max(cpuEdges[incoming.edge_idx].length / 5.0f, 1.0f);
+                        const float congestion = static_cast<float>(edge_car_counts[incoming.edge_idx]) / capacity;
+                        // BPR (Bureau of Public Roads) congestion function
+                        travel_time = incoming.travel_time * (1.0f + 4.0f * std::pow(congestion, 4.0f));
+                    }
+                }
+                float new_time = current_time + travel_time;
 
                 if (new_time < min_travel_time[incoming.source_node]) {
                     min_travel_time[incoming.source_node] = new_time;
@@ -1035,7 +1063,9 @@ private:
         // Take an initial snapshot so the UI has accurate stats on startup
         takeSnapshot();
 
-        for (double lastSnapshotTime = glfwGetTime(); glfwWindowShouldClose(window) == 0;) {
+        double lastSnapshotSimTime = simTime;
+
+        while (glfwWindowShouldClose(window) == 0) {
             glfwPollEvents();
             if (glfwWindowShouldClose(window)) break;
 
@@ -1043,10 +1073,28 @@ private:
             const double dt_real = currentFrameTime - lastFrameTime;
             lastFrameTime = currentFrameTime;
 
-            // Periodically take a snapshot to update statistics and check if the simulation is finished
-            if (!isPaused && (currentFrameTime - lastSnapshotTime >= 1.0)) {
+            // Periodically take a snapshot to update statistics, run dynamic GPS rerouting, and check if finished
+            // Runs exactly every 60.0 seconds of simulation time, fully independent of real-world time
+            if (!isPaused && (simTime - lastSnapshotSimTime >= 60.0)) {
                 takeSnapshot();
-                lastSnapshotTime = currentFrameTime;
+
+                // Recalculate routes dynamically based on new car counts and congestion
+                recalculateGPS();
+
+                // Upload the newly updated cpuEdges array (specifically next_edge_idx) to VRAM
+                {
+                    const vk::DeviceSize bufferSize{sizeof(GPU_Edge) * totalEdges};
+                    auto [stagingBuffer, stagingMemory] = createBuffer(
+                        bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
+                    );
+                    void *mappedData{stagingMemory->mapMemory(0, bufferSize)};
+                    std::memcpy(mappedData, cpuEdges.data(), bufferSize);
+                    stagingMemory->unmapMemory();
+                    copyBuffer(*stagingBuffer, *edgeBuffer, bufferSize);
+                }
+
+                lastSnapshotSimTime = simTime;
 
                 // Stop simulation if finished (no active cars on the road and no cars left in the garage)
                 if (statRoad == 0 && statGarage == 0) {

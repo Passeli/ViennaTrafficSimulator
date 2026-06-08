@@ -164,6 +164,7 @@ void main(uint3 threadId: SV_DispatchThreadID) {
         }
       } else {
         // No path to exit (e.g. exit closed or all exits closed)
+        car.state = CarState::Stuck;
         int dummy = 0;
         InterlockedExchange(nodes[target_node].lock, -1, dummy);
       }

@@ -223,13 +223,22 @@ print(f"🔥 TOTAL CARS GENERATED: {total_spawn_capacity:,} 🔥")
 print("-> Snapping features to the street graph...")
 centroids_latlon = valid_parking.geometry.centroid.to_crs(epsg=4326)
 
-# Create a subgraph of G that excludes edges leading to blind nodes
+# Create a subgraph of G that excludes edges leading to unreachable nodes (nodes that cannot reach any exit)
 exit_nodes_set = set(exit_nodes)
+print("-> Calculating node reachability from exits...")
+G_reversed = G.reverse(copy=True)
+reachable_nodes = set()
+for exit_node in exit_nodes:
+    if exit_node in G_reversed:
+        nodes_from_exit = nx.descendants(G_reversed, exit_node)
+        reachable_nodes.update(nodes_from_exit)
+        reachable_nodes.add(exit_node)
+
+print(f"   -> Reachable nodes: {len(reachable_nodes)} / {len(G.nodes)}")
+
 non_blind_edges = []
 for u, v, key in G.edges(keys=True):
-    is_v_exit = v in exit_nodes_set
-    is_v_blind = (not is_v_exit) and (G.out_degree(v) == 0)
-    if not is_v_blind:
+    if v in reachable_nodes:
         non_blind_edges.append((u, v, key))
 
 G_non_blind = G.edge_subgraph(non_blind_edges)
@@ -370,7 +379,7 @@ with open("vulkan_nodes.bin", "wb") as f:
         # NodeType: Normal = 0, OpenExit = 1, ClosedExit = 2, Blind = 3
         if is_exit:
             node_type = 1
-        elif G.out_degree(node_id) == 0:
+        elif node_id not in reachable_nodes:
             node_type = 3
         else:
             node_type = 0
