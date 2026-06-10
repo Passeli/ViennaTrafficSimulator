@@ -174,6 +174,12 @@ private:
     float participationPercentage = 100.f;
     bool hasStarted = false;
 
+    // --- METRICS HISTORY ---
+    std::vector<float> flowrateHistory;
+    std::vector<float> evacuatedHistory;
+    float lastRecordTime = 0.f;
+    std::int32_t lastEvacuatedCount = 0;
+
     // --- GRAPH ROUTING DATA (NEW) ---
     struct IncomingEdge {
         std::int32_t source_node;
@@ -1322,6 +1328,29 @@ private:
                                  : 0.f;
             std::string progressText = std::format("Evacuation Progress: {:.1f}%", progress * 100.f);
             ImGui::ProgressBar(progress, ImVec2(-1.f, 0.f), progressText.c_str());
+
+            // Update Metrics History (Every 60 simulation seconds)
+            if (simTime - lastRecordTime >= 60.f) {
+                const auto flow = static_cast<float>(statEvacuated - lastEvacuatedCount); // cars per minute
+                flowrateHistory.push_back(flow);
+                evacuatedHistory.push_back(static_cast<float>(statEvacuated));
+                lastEvacuatedCount = statEvacuated;
+                lastRecordTime = simTime;
+            }
+
+            if (!flowrateHistory.empty()) {
+                ImGui::Spacing();
+                ImGui::Text("--- CHARTS ---");
+                // Box chart (Histogram) for flow rate
+                ImGui::PlotHistogram("Flowrate (cars/min)", flowrateHistory.data(),
+                                     static_cast<std::int32_t>(flowrateHistory.size()),
+                                     0, nullptr, 0.f, std::numeric_limits<float>::max(), ImVec2(0.f, 80.f));
+
+                // Line chart for total evacuated
+                ImGui::PlotLines("Total Evacuated", evacuatedHistory.data(),
+                                 static_cast<std::int32_t>(evacuatedHistory.size()),
+                                 0, nullptr, 0.f, std::numeric_limits<float>::max(), ImVec2(0.f, 80.f));
+            }
 
             if (!cpuCars.empty()) {
                 ImGui::Spacing();
