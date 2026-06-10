@@ -33,10 +33,10 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
   const float nx = local_x / (pc.extent_width * 0.5) / pc.aspect_ratio;
   const float ny = local_y / (pc.extent_height * 0.5);
 
-  // Colors: Cyan for open exits, Red for closed exits, Yellow for blind nodes
+  // Colors: Green for open exits, Red for closed exits, Yellow for blind nodes
   float3 node_color = float3(1.0, 0.0, 0.0);
   if (n.type == NodeType::OpenExit) {
-    node_color = float3(0.0, 0.9, 1.0);
+    node_color = float3(0.0, 0.9, 0.0);
   } else if (n.type == NodeType::Blind) {
     node_color = float3(1.0, 0.9, 0.0);
   }
