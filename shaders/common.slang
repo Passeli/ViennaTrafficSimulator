@@ -23,7 +23,7 @@ struct Edge {
   float max_speed;
   int head_car_idx;
   int garage_lock;
-  int padding;
+  int spawn_capacity;
 };
 
 struct Car {

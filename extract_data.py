@@ -398,10 +398,11 @@ with open("vulkan_edges.bin", "wb") as f:
         next_edge_idx = edge_next_indices[i]
         length = data['length']
         max_speed_ms = data['max_speed_ms']  # Fetched clean
+        spawn_cap = int(data.get('spawn_capacity', 0))
 
         f.write(struct.pack('iiiffiii',
                             start_node_idx, end_node_idx, next_edge_idx,
-                            float(length), max_speed_ms, -1, 0, 0))
+                            float(length), max_speed_ms, -1, -1, spawn_cap))
 
 # --- C. CARS BINARY (32 Bytes: iffiiiii) ---
 print("   -> Packing Virtual Garages (Cars)...")

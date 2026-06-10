@@ -33,7 +33,7 @@ struct GPU_Edge {
     float max_speed = 0.0f;
     int32_t head_car_idx = -1;
     int32_t garage_lock = -1;
-    int32_t padding = 0;
+    int32_t spawn_capacity = 0;
 };
 
 struct GPU_Car {

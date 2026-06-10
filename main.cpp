@@ -1281,12 +1281,13 @@ private:
                 // If the car is on an edge, show the edge data too!
                 if (car.current_edge_idx != -1) {
                     GPU_Edge &edge = cpuEdges[car.current_edge_idx];
-                    ImGui::BeginChild("EdgeData", ImVec2(0, 120), true);
+                    ImGui::BeginChild("EdgeData", ImVec2(0, 140), true);
                     ImGui::Text("--- EDGE %d ---", car.current_edge_idx);
                     ImGui::Text("Length: %.2f meters", edge.length);
                     ImGui::Text("Max Speed: %.1f km/h", edge.max_speed * 3.6f);
                     ImGui::Text("Head Car ID: %d", edge.head_car_idx);
                     ImGui::Text("Target Node ID: %d", edge.end_node_idx);
+                    ImGui::Text("Spawn Capacity: %d", edge.spawn_capacity);
                     ImGui::EndChild();
                 }
             }
