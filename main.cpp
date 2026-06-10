@@ -202,7 +202,7 @@ private:
             }
         }
 
-        // 1. Reset all edges to have no destination, and update exit edge padding
+        // 1. Reset all edges to have no destination and update exit-edge padding
         for (auto &edge: cpuEdges) {
             edge.next_edge_idx = -1;
         }
@@ -454,7 +454,7 @@ private:
                 }
             }
 
-            // Right Click = Inspect Car
+            // Right-Click = Inspect Car
             if (button == GLFW_MOUSE_BUTTON_RIGHT) {
                 if (action == GLFW_PRESS) {
                     engine->isInspecting = true;
@@ -483,7 +483,7 @@ private:
                 const double deltaX = xpos - engine->lastMouseX;
                 const double deltaY = ypos - engine->lastMouseY;
 
-                const float screenFactorX = (engine->mapBounds.extent_width / static_cast<float>(engine->swapchainExtent.width));
+                const float screenFactorX = (engine->mapBounds.extent_height / static_cast<float>(engine->swapchainExtent.height));
                 const float screenFactorY = (engine->mapBounds.extent_height / static_cast<float>(engine->swapchainExtent.height));
 
                 engine->mapBounds.camera_x -= static_cast<float>(deltaX) * (
@@ -1161,9 +1161,9 @@ private:
 
                     const int nodeIdx = cpuEdges[edgeIdx].end_node_idx;
                     if (nodeIdx >= 0 && nodeIdx < static_cast<int>(cpuNodes.size())) {
-                        const vk::DeviceSize offset = sizeof(GPU_Node) * nodeIdx;
-                        const void *mappedData = nodeReadbackMemory->mapMemory(offset, sizeof(GPU_Node));
-                        std::memcpy(&cpuNodes[nodeIdx], mappedData, sizeof(GPU_Node));
+                        const vk::DeviceSize nodeOffset = sizeof(GPU_Node) * nodeIdx;
+                        const void *mappedNodeData = nodeReadbackMemory->mapMemory(nodeOffset, sizeof(GPU_Node));
+                        std::memcpy(&cpuNodes[nodeIdx], mappedNodeData, sizeof(GPU_Node));
                         nodeReadbackMemory->unmapMemory();
                     }
                 }
@@ -1306,8 +1306,8 @@ private:
                     static_cast<float>(std::max(startMouseX, currentMouseX)),
                     static_cast<float>(std::max(startMouseY, currentMouseY))
                 );
-                drawList->AddRectFilled(p_min, p_max, IM_COL32(0, 150, 255, 60), 4.0f);
-                drawList->AddRect(p_min, p_max, IM_COL32(0, 150, 255, 255), 4.0f, 0, 2.0f);
+                drawList->AddRectFilled(p_min, p_max, IM_COL32(0, 150, 255, 60), 0.0f);
+                drawList->AddRect(p_min, p_max, IM_COL32(0, 150, 255, 255), 0.0f, 0, 2.0f);
             }
 
             if (isInspecting) {
@@ -1610,7 +1610,7 @@ private:
         ndcX *= mapBounds.aspect_ratio;
 
         // 3. Reverse the Zoom and Extent scaling
-        const float localX = (ndcX * (mapBounds.extent_width * 0.5f)) / mapBounds.zoom_level;
+        const float localX = (ndcX * (mapBounds.extent_height * 0.5f)) / mapBounds.zoom_level;
         const float localY = (ndcY * (mapBounds.extent_height * 0.5f)) / mapBounds.zoom_level;
 
         // 4. Reverse the Camera Pan
@@ -1618,26 +1618,8 @@ private:
         outWorldY = localY + mapBounds.camera_y;
     }
 
-    float worldDistanceToPixels(float distanceMeters) const {
-        return (distanceMeters * mapBounds.zoom_level * swapchainExtent.height) / mapBounds.extent_width;
-    }
-
-    void worldToScreen(const float worldX, const float worldY, float &outScreenX, float &outScreenY) const {
-        // 1. Apply Camera Pan
-        float localX = worldX - mapBounds.camera_x;
-        float localY = worldY - mapBounds.camera_y;
-
-        // 2. Apply Zoom and Extent scaling
-        float ndcX = (localX * mapBounds.zoom_level) / (mapBounds.extent_width * 0.5f);
-        float ndcY = (localY * mapBounds.zoom_level) / (mapBounds.extent_height * 0.5f);
-
-        // 3. Apply Aspect Ratio correction
-        ndcX /= mapBounds.aspect_ratio;
-
-        // 4. Convert NDC (-1.0 to 1.0) to Screen Pixels
-        outScreenX = (ndcX + 1.0f) * 0.5f * static_cast<float>(swapchainExtent.width);
-        // Invert Y because screen pixels Y points down but NDC Y points up
-        outScreenY = (-ndcY + 1.0f) * 0.5f * static_cast<float>(swapchainExtent.height);
+    [[nodiscard]] float worldDistanceToPixels(const float distanceMeters) const {
+        return distanceMeters * mapBounds.zoom_level * static_cast<float>(swapchainExtent.height) / mapBounds.extent_height;
     }
 
     void selectClosestCar(const float worldX, const float worldY) {
@@ -1675,7 +1657,7 @@ private:
         }
 
         // If we clicked reasonably close to a car (e.g., within 20 meters), select it!
-        const float thresholdDegrees = 20.0f / 111300.0f;
+        constexpr float thresholdDegrees = 20.0f / 111300.0f;
         if (closestCarId != -1 && closestDistSq < thresholdDegrees * thresholdDegrees) {
             selectedCarId = closestCarId;
             std::println("Selected Car ID: {}", selectedCarId);
@@ -1698,18 +1680,18 @@ private:
             float closestDistSq = std::numeric_limits<float>::max();
 
             for (size_t i = 0; i < allExitNodes.size(); ++i) {
-                float ex = cpuNodes[allExitNodes[i]].x;
-                float ey = cpuNodes[allExitNodes[i]].y;
-                float dx = ex - startWorldX;
-                float dy = ey - startWorldY;
-                float distSq = (dx * dx) + (dy * dy);
+                const float ex = cpuNodes[allExitNodes[i]].x;
+                const float ey = cpuNodes[allExitNodes[i]].y;
+                const float dx = ex - startWorldX;
+                const float dy = ey - startWorldY;
+                const float distSq = (dx * dx) + (dy * dy);
                 if (distSq < closestDistSq) {
                     closestDistSq = distSq;
                     closestExitIdx = static_cast<int>(i);
                 }
             }
 
-            const float thresholdDegrees = 50.0f / 111300.0f;
+            constexpr float thresholdDegrees = 50.0f / 111300.0f;
             if (closestExitIdx != -1 && closestDistSq < thresholdDegrees * thresholdDegrees) {
                 isExitOpen[closestExitIdx] = !isExitOpen[closestExitIdx];
                 triggerDynamicReroute();
@@ -1717,15 +1699,15 @@ private:
             return;
         }
 
-        float minX = std::min(startWorldX, currentWorldX);
-        float maxX = std::max(startWorldX, currentWorldX);
-        float minY = std::min(startWorldY, currentWorldY);
-        float maxY = std::max(startWorldY, currentWorldY);
+        const float minX = std::min(startWorldX, currentWorldX);
+        const float maxX = std::max(startWorldX, currentWorldX);
+        const float minY = std::min(startWorldY, currentWorldY);
+        const float maxY = std::max(startWorldY, currentWorldY);
 
         bool changed = false;
         for (size_t i = 0; i < allExitNodes.size(); ++i) {
-            float x = cpuNodes[allExitNodes[i]].x;
-            float y = cpuNodes[allExitNodes[i]].y;
+            const float x = cpuNodes[allExitNodes[i]].x;
+            const float y = cpuNodes[allExitNodes[i]].y;
 
             if (x >= minX && x <= maxX && y >= minY && y <= maxY) {
                 isExitOpen[i] = !isExitOpen[i];
