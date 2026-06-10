@@ -18,7 +18,7 @@ void main(uint3 threadId: SV_DispatchThreadID) {
 
   Car car = cars[id];
 
-  if (car.state == CarState::Evacuated)
+  if (car.state == CarState::Evacuated || car.state == CarState::Disabled)
     return;
 
   const Edge edge = edges[car.current_edge_idx];

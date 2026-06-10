@@ -8,7 +8,8 @@ enum class CarState : int32_t {
     Queuing = 1,
     Evacuated = 2,
     Garage = 3,
-    Stuck = 4
+    Stuck = 4,
+    Disabled = 5
 };
 
 enum class NodeType : int32_t {

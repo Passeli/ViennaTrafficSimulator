@@ -166,8 +166,11 @@ private:
     int statRoad = 0;
     int statEvacuated = 0;
     int statStuck = 0;
+    int statDisabled = 0;
     float statAvgSpeed = 0.0f;
     float simTime = 0.0f;
+    float participationPercentage = 100.0f;
+    bool hasStarted = false;
 
     // --- GRAPH ROUTING DATA (NEW) ---
     struct IncomingEdge {
@@ -651,6 +654,41 @@ private:
         copyBuffer(*stagingBuffer, *outBuffer, bufferSize);
     }
 
+    void applyParticipation() {
+        device->waitIdle();
+
+        auto rawCars{loadBinaryData<GPU_Car>("vulkan_cars.bin")};
+        std::vector<int> cars_spawned_per_edge(cpuEdges.size(), 0);
+        std::vector<int> target_per_edge(cpuEdges.size(), 0);
+        
+        float fractional_cars = 0.0f;
+        for (size_t i = 0; i < cpuEdges.size(); ++i) {
+            float ideal_cars = cpuEdges[i].spawn_capacity * (participationPercentage / 100.0f);
+            fractional_cars += ideal_cars;
+            int spawn_now = static_cast<int>(fractional_cars);
+            target_per_edge[i] = spawn_now;
+            fractional_cars -= spawn_now;
+        }
+
+        for (auto &c: rawCars) {
+            c.next_car_idx = -1;
+            
+            int edge_idx = c.current_edge_idx;
+            if (edge_idx >= 0 && edge_idx < cpuEdges.size()) {
+                if (cars_spawned_per_edge[edge_idx] < target_per_edge[edge_idx]) {
+                    cars_spawned_per_edge[edge_idx]++;
+                } else {
+                    c.state = CarState::Disabled; // Disable this car
+                }
+            }
+        }
+
+        uploadVectorToGPU(rawCars, carBuffer, carMemory);
+        cpuCars = rawCars;
+        updateDescriptorSets();
+        takeSnapshot();
+    }
+
     void loadMapDataAndCreateBuffers() {
         std::println("Loading binary data into RAM...");
 
@@ -834,6 +872,10 @@ private:
         };
         computeDescriptorSets = vk::raii::DescriptorSets{*device, allocInfo};
 
+        updateDescriptorSets();
+    }
+
+    void updateDescriptorSets() {
         const vk::DescriptorBufferInfo nodeBufferInfo{.buffer = **nodeBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
         const vk::DescriptorBufferInfo edgeBufferInfo{.buffer = **edgeBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
         const vk::DescriptorBufferInfo carBufferInfo{.buffer = **carBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
@@ -1220,10 +1262,14 @@ private:
                 std::ranges::fill(isExitOpen, false);
                 routingChanged = true;
             }
+            
+            ImGui::Spacing();
+            
+            ImGui::BeginDisabled(hasStarted);
+            ImGui::SliderFloat("Participation (%)", &participationPercentage, 0.0f, 100.0f, "%.1f%%");
+            ImGui::EndDisabled();
 
             ImGui::Spacing();
-
-
 
             if (routingChanged) {
                 triggerDynamicReroute();
@@ -1231,12 +1277,18 @@ private:
             // ==========================================
 
             ImGui::Separator();
-            if (ImGui::Button(isPaused ? "Resume Simulation" : "Pause Simulation")) {
+            
+            if (ImGui::Button(isPaused ? "Play Simulation" : "Pause Simulation", ImVec2(-1.0f, 40.0f))) {
+                if (!hasStarted) {
+                    applyParticipation();
+                    hasStarted = true;
+                }
                 isPaused = !isPaused;
                 if (isPaused) {
                     takeSnapshot();
                 }
             }
+            ImGui::Spacing();
             ImGui::SliderInt("Simulation Speed", &simSpeed, 1, 256, "%d x");
 
             ImGui::Separator();
@@ -1254,7 +1306,8 @@ private:
             ImGui::Text("City Average Speed: %.1f km/h", statAvgSpeed * 3.6f);
 
             // Progress Bar!
-            float progress = static_cast<float>(statEvacuated) / static_cast<float>(totalCars);
+            int participatingCars = static_cast<int>(totalCars) - statDisabled;
+            float progress = participatingCars > 0 ? static_cast<float>(statEvacuated) / static_cast<float>(participatingCars) : 0.0f;
             std::string progressText = std::format("Evacuation Progress: {:.1f}%", progress * 100.0f);
             ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f), progressText.c_str());
 
@@ -1582,6 +1635,8 @@ private:
         statRoad = 0;
         statEvacuated = 0;
         statStuck = 0;
+        statDisabled = 0;
+        statAvgSpeed = 0.0f;
         double totalSpeed = 0.0;
 
         for (const auto &car: cpuCars) {
@@ -1594,6 +1649,8 @@ private:
                 statGarage++;
             } else if (car.state == CarState::Stuck) {
                 statStuck++;
+            } else if (car.state == CarState::Disabled) {
+                statDisabled++;
             }
         }
         statAvgSpeed = statRoad > 0 ? static_cast<float>(totalSpeed / statRoad) : 0.0f;

@@ -3,7 +3,8 @@ enum CarState : int {
   Queuing = 1,
   Evacuated = 2,
   Garage = 3,
-  Stuck = 4
+  Stuck = 4,
+  Disabled = 5
 };
 
 enum NodeType : int { Normal = 0, OpenExit = 1, ClosedExit = 2, Blind = 3 };

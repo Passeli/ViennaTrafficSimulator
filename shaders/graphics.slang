@@ -19,8 +19,9 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
                         uint instanceID: SV_InstanceID) {
   const Car car = cars[instanceID];
 
-  // If evacuated or garaged, collapse and exit
-  if (car.state == CarState::Evacuated || car.state == CarState::Garage) {
+  // If evacuated, disabled, or garaged, collapse and exit
+  if (car.state == CarState::Evacuated || car.state == CarState::Disabled ||
+      car.state == CarState::Garage) {
     VertexOutput output;
     output.position = float4(2.0, 2.0, 0.0, 1.0);
     output.color = float3(0.0, 0.0, 0.0);
