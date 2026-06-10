@@ -40,7 +40,7 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
   const float local_x = (car_x - pc.camera_x) * pc.zoom_level;
   const float local_y = (car_y - pc.camera_y) * pc.zoom_level;
 
-  const float nx = local_x / (pc.extent_width * 0.5) / pc.aspect_ratio;
+  const float nx = local_x / (pc.extent_height * 0.5) / pc.aspect_ratio;
   const float ny = local_y / (pc.extent_height * 0.5);
 
   const bool is_selected = (instanceID == (uint)pc.selected_car_id);
@@ -49,8 +49,10 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
   if (is_selected) {
     debug_color = float3(1.0, 0.0, 1.0); // Neon Pink/Fuchsia
   } else if (car.state == CarState::Driving) {
-    const float speed_ratio = clamp(car.speed / max(edge.max_speed, 1.0), 0.0, 1.0);
-    debug_color = lerp(float3(0.95, 0.25, 0.15), float3(0.15, 0.85, 0.35), speed_ratio); // Red to Green speed gradient
+    const float speed_ratio =
+        clamp(car.speed / max(edge.max_speed, 1.0), 0.0, 1.0);
+    debug_color = lerp(float3(0.95, 0.25, 0.15), float3(0.15, 0.85, 0.35),
+                       speed_ratio); // Red to Green speed gradient
   } else if (car.state == CarState::Stuck) {
     debug_color = float3(1.0, 0.65, 0.0); // Amber/Orange
   } else {
@@ -63,8 +65,9 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
 
   float2 offset = offsets[vertexID];
   if (is_selected) {
-    const float2 centered_offsets[6] = { float2(-1, -1), float2(1, -1), float2(-1, 1),
-                                         float2(1, -1),  float2(1, 1),  float2(-1, 1) };
+    const float2 centered_offsets[6] = { float2(-1, -1), float2(1, -1),
+                                         float2(-1, 1),  float2(1, -1),
+                                         float2(1, 1),   float2(-1, 1) };
     offset = centered_offsets[vertexID];
   }
 

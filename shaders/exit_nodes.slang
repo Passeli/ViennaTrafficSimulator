@@ -30,7 +30,7 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
   const float local_x = (n.x - pc.camera_x) * pc.zoom_level;
   const float local_y = (n.y - pc.camera_y) * pc.zoom_level;
 
-  const float nx = local_x / (pc.extent_width * 0.5) / pc.aspect_ratio;
+  const float nx = local_x / (pc.extent_height * 0.5) / pc.aspect_ratio;
   const float ny = local_y / (pc.extent_height * 0.5);
 
   // Colors: Green for open exits, Red for closed exits, Yellow for blind nodes

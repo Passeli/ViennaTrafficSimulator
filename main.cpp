@@ -658,8 +658,11 @@ private:
         auto rawEdges{loadBinaryData<GPU_Edge>("vulkan_edges.bin")};
         auto rawCars{loadBinaryData<GPU_Car>("vulkan_cars.bin")};
 
-        for (auto &n: nodes)
+        for (auto &n: nodes) {
             n.lock = -1;
+            // Multiply X coordinates by cos(48.2082) to fix map projection distortion
+            n.x *= 0.6664f;
+        }
 
         for (auto &e: rawEdges) {
             e.head_car_idx = -1;

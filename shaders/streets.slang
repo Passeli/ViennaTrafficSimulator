@@ -25,17 +25,18 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
   const float local_x = (n.x - pc.camera_x) * pc.zoom_level;
   const float local_y = (n.y - pc.camera_y) * pc.zoom_level;
 
-  const float nx = local_x / (pc.extent_width * 0.5) / pc.aspect_ratio;
+  const float nx = local_x / (pc.extent_height * 0.5) / pc.aspect_ratio;
   const float ny = local_y / (pc.extent_height * 0.5);
 
   // 2. Color based on population density (spawn_capacity)
   // We use 50 cars as a reasonable max for visual mapping
   const float density = clamp(float(edge.spawn_capacity) / 50.0, 0.0, 1.0);
-  
-  // Color scale: from dim asphalt gray (empty) to bright magenta/pink (high density)
+
+  // Color scale: from dim asphalt gray (empty) to bright magenta/pink
   const float3 low_density_color = float3(0.2, 0.2, 0.25);
-  const float3 high_density_color = float3(1.0, 0.2, 0.6); 
-  const float3 edge_color = lerp(low_density_color, high_density_color, density);
+  const float3 high_density_color = float3(1.0, 0.2, 0.6);
+  const float3 edge_color =
+      lerp(low_density_color, high_density_color, density);
 
   VertexOutput output;
   // -ny inverts the Y axis so North is UP
