@@ -107,8 +107,8 @@ private:
 
     std::uint32_t totalCars = 0;
     std::uint32_t totalEdges = 0;
-    const std::uint32_t WIDTH = 1920;
-    const std::uint32_t HEIGHT = 1080;
+    const std::uint32_t WIDTH = 800;
+    const std::uint32_t HEIGHT = 600;
 
     std::unique_ptr<vk::raii::SurfaceKHR> surface;
     std::unique_ptr<vk::raii::SwapchainKHR> swapchain;
@@ -660,7 +660,9 @@ private:
         stagingMemory->unmapMemory();
 
         auto [deviceLocalBuffer, deviceLocalMemory] = createBuffer(
-            bufferSize, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer,
+            bufferSize,
+            vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferSrc,
             vk::MemoryPropertyFlagBits::eDeviceLocal
         );
 
@@ -1825,12 +1827,11 @@ private:
 };
 
 auto main() -> std::int32_t {
-    std::setvbuf(stdout, nullptr, _IONBF, 0);
     try {
         EvacuationEngine engine{};
         engine.run();
     } catch (const std::exception &e) {
-        std::println(stderr, "Fatal GPU Error: {}", e.what());
+        std::println(std::cerr, "Fatal GPU Error: {}", e.what());
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
