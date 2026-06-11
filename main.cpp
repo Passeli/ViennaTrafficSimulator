@@ -1342,14 +1342,16 @@ private:
                 ImGui::Spacing();
                 ImGui::Text("--- CHARTS ---");
                 // Box chart (Histogram) for flow rate
+                std::string flowText = std::format("{:.0f} cars/min", flowrateHistory.back());
                 ImGui::PlotHistogram("Flowrate (cars/min)", flowrateHistory.data(),
                                      static_cast<std::int32_t>(flowrateHistory.size()),
-                                     0, nullptr, 0.f, std::numeric_limits<float>::max(), ImVec2(0.f, 80.f));
+                                     0, flowText.c_str(), 0.f, std::numeric_limits<float>::max(), ImVec2(0.f, 120.f));
 
                 // Line chart for total evacuated
+                std::string evacText = std::format("{:.0f} evacuated", evacuatedHistory.back());
                 ImGui::PlotLines("Total Evacuated", evacuatedHistory.data(),
                                  static_cast<std::int32_t>(evacuatedHistory.size()),
-                                 0, nullptr, 0.f, std::numeric_limits<float>::max(), ImVec2(0.f, 80.f));
+                                 0, evacText.c_str(), 0.f, std::numeric_limits<float>::max(), ImVec2(0.f, 120.f));
             }
 
             if (!cpuCars.empty()) {
