@@ -17,6 +17,7 @@
 #include <queue>
 #include <set>
 #include <chrono>
+#include <nlohmann/json.hpp>
 
 #include "common.hpp"
 
@@ -45,19 +46,59 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 class EvacuationEngine {
 public:
+    std::string vulkanNodesPath = "vulkan_nodes.bin";
+    std::string vulkanEdgesPath = "vulkan_edges.bin";
+    std::string vulkanCarsPath = "vulkan_cars.bin";
+    bool isHeadless = false;
+    std::string outputFilePath = "results.json";
+    std::vector<std::int32_t> configClosedExits;
+
+    void loadConfig(const std::string &configPath) {
+        std::ifstream f(configPath);
+        if (!f.is_open()) {
+            std::println("Could not open config file: {}. Using default settings.", configPath);
+            isPaused = !isHeadless;
+            return;
+        }
+        try {
+            nlohmann::json data = nlohmann::json::parse(f);
+            if (data.contains("vulkan_nodes_path")) vulkanNodesPath = data["vulkan_nodes_path"].get<std::string>();
+            if (data.contains("vulkan_edges_path")) vulkanEdgesPath = data["vulkan_edges_path"].get<std::string>();
+            if (data.contains("vulkan_cars_path")) vulkanCarsPath = data["vulkan_cars_path"].get<std::string>();
+            if (data.contains("headless")) isHeadless = data["headless"].get<bool>();
+            if (data.contains("output_file")) outputFilePath = data["output_file"].get<std::string>();
+
+            if (data.contains("participation"))
+                participation = data["participation"].get<double>();
+
+            if (data.contains("closed_exits")) {
+                configClosedExits = data["closed_exits"].get<std::vector<std::int32_t> >();
+            }
+            isPaused = !isHeadless;
+            std::println("Configuration loaded from {}", configPath);
+        } catch (const std::exception &e) {
+            std::println("Error parsing config file: {}. Details: {}", configPath, e.what());
+            isPaused = !isHeadless;
+        }
+    }
+
     void run() {
-        initWindow();
+        if (!isHeadless) {
+            initWindow();
+        }
         initVulkan();
         loadMapDataAndCreateBuffers();
         createComputePipeline();
 
-        // Refactored startup sequence to support swapchain recreation
-        createSwapchain();
-        createRenderPass();
-        createGraphicsPipeline();
-        createFramebuffers();
+        if (!isHeadless) {
+            // Refactored startup sequence to support swapchain recreation
+            createSwapchain();
+            createRenderPass();
+            createGraphicsPipeline();
+            createFramebuffers();
 
-        initImGui();
+            initImGui();
+        }
 
         mainLoop();
     }
@@ -171,12 +212,16 @@ private:
     std::int32_t statDisabled = 0;
     float statAvgSpeed = 0.f;
     float simTime = 0.f;
-    float participationPercentage = 100.f;
+    double participation = 1.0;
     bool hasStarted = false;
 
     // --- METRICS HISTORY ---
-    std::vector<float> flowrateHistory;
-    std::vector<float> evacuatedHistory;
+    std::vector<std::int32_t> flowrateHistory;
+    std::vector<std::int32_t> evacuatedHistory;
+    std::vector<std::int32_t> garageHistory;
+    std::vector<std::int32_t> roadHistory;
+    std::vector<std::int32_t> stuckHistory;
+    std::vector<float> avgSpeedHistory;
     float lastRecordTime = 0.f;
     std::int32_t lastEvacuatedCount = 0;
 
@@ -191,6 +236,8 @@ private:
     std::vector<std::vector<std::int32_t> > forwardGraph;
     std::vector<std::int32_t> allExitNodes;
     std::vector<bool> isExitOpen;
+    std::vector<std::vector<std::int32_t> > exitFlowrateHistory;
+    std::vector<std::int32_t> exitLastEvacuatedCount;
 
     // --- ROUTING FUNCTIONS (NEW) ---
     void recalculateGPS() {
@@ -198,8 +245,8 @@ private:
         const auto startTime = std::chrono::high_resolution_clock::now();
 
         // 0. Count cars and detect stuck cars on each edge
-        std::vector<std::int32_t> edge_car_counts(totalEdges, 0);
-        std::vector<bool> edge_has_stuck(totalEdges, false);
+        std::vector edge_car_counts(totalEdges, 0);
+        std::vector edge_has_stuck(totalEdges, false);
         if (!cpuCars.empty()) {
             for (const auto &car: cpuCars) {
                 if (car.state == CarState::Driving || car.state == CarState::Queuing || car.state == CarState::Stuck) {
@@ -224,8 +271,8 @@ private:
             cpuNodes[nodeIdx].type = isExitOpen[i] ? NodeType::OpenExit : NodeType::ClosedExit;
         }
 
-        std::vector<float> min_travel_time(cpuNodes.size(), std::numeric_limits<float>::max());
-        std::vector<std::int32_t> next_node_to_exit(cpuNodes.size(), -1);
+        std::vector min_travel_time(cpuNodes.size(), std::numeric_limits<float>::max());
+        std::vector next_node_to_exit(cpuNodes.size(), -1);
 
         // Priority Queue: {travel_time, node_idx}
         using NodeRecord = std::pair<float, std::int32_t>;
@@ -323,8 +370,6 @@ private:
             stagingMemory->unmapMemory();
             copyBuffer(*stagingBuffer, *nodeBuffer, bufferSize);
         }
-
-        std::println("GPS Reroute and Node Types Uploaded to VRAM!");
 
         // 4. Resume the simulation
         isPaused = wasPaused;
@@ -546,7 +591,10 @@ private:
         };
 
         std::uint32_t glfwExtensionCount = 0;
-        const char **glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+        const char **glfwExtensions = nullptr;
+        if (!isHeadless) {
+            glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+        }
 
         const vk::InstanceCreateInfo createInfo{
             .pApplicationInfo = &appInfo, .enabledExtensionCount = glfwExtensionCount,
@@ -573,9 +621,11 @@ private:
             .queueFamilyIndex = queueFamilyIndex, .queueCount = 1, .pQueuePriorities = &queuePriority
         };
 
-        constexpr std::array<const char *, 2> deviceExtensions = {
-            VK_KHR_SWAPCHAIN_EXTENSION_NAME, "VK_KHR_shader_draw_parameters"
-        };
+        std::vector<const char *> activeDeviceExtensions;
+        if (!isHeadless) {
+            activeDeviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        }
+        activeDeviceExtensions.push_back("VK_KHR_shader_draw_parameters");
 
         vk::PhysicalDeviceFeatures deviceFeatures{};
         deviceFeatures.vertexPipelineStoresAndAtomics = VK_TRUE;
@@ -583,8 +633,8 @@ private:
 
         const vk::DeviceCreateInfo deviceCreateInfo{
             .queueCreateInfoCount = 1, .pQueueCreateInfos = &queueCreateInfo,
-            .enabledExtensionCount = static_cast<std::uint32_t>(deviceExtensions.size()),
-            .ppEnabledExtensionNames = deviceExtensions.data(), .pEnabledFeatures = &deviceFeatures
+            .enabledExtensionCount = static_cast<std::uint32_t>(activeDeviceExtensions.size()),
+            .ppEnabledExtensionNames = activeDeviceExtensions.data(), .pEnabledFeatures = &deviceFeatures
         };
 
         device = std::make_unique<vk::raii::Device>(*physicalDevice, deviceCreateInfo);
@@ -674,17 +724,17 @@ private:
     void applyParticipation() {
         device->waitIdle();
 
-        auto rawCars = loadBinaryData<GPU_Car>("vulkan_cars.bin");
-        std::vector<std::int32_t> cars_spawned_per_edge(cpuEdges.size(), 0);
-        std::vector<std::int32_t> target_per_edge(cpuEdges.size(), 0);
+        auto rawCars = loadBinaryData<GPU_Car>(vulkanCarsPath);
+        std::vector cars_spawned_per_edge(cpuEdges.size(), 0);
+        std::vector target_per_edge(cpuEdges.size(), 0);
 
-        float fractional_cars = 0.f;
+        double fractional_cars = 0.0;
         for (std::size_t i = 0; i < cpuEdges.size(); ++i) {
-            const float ideal_cars = static_cast<float>(cpuEdges[i].spawn_capacity) * (participationPercentage / 100.f);
+            const double ideal_cars = static_cast<double>(cpuEdges[i].spawn_capacity) * participation;
             fractional_cars += ideal_cars;
             const auto spawn_now = static_cast<std::int32_t>(fractional_cars);
             target_per_edge[i] = spawn_now;
-            fractional_cars -= static_cast<float>(spawn_now);
+            fractional_cars -= static_cast<double>(spawn_now);
         }
 
         for (auto &c: rawCars) {
@@ -707,9 +757,9 @@ private:
     }
 
     void loadMapDataAndCreateBuffers() {
-        auto nodes = loadBinaryData<GPU_Node>("vulkan_nodes.bin");
-        auto rawEdges = loadBinaryData<GPU_Edge>("vulkan_edges.bin");
-        auto rawCars = loadBinaryData<GPU_Car>("vulkan_cars.bin");
+        auto nodes = loadBinaryData<GPU_Node>(vulkanNodesPath);
+        auto rawEdges = loadBinaryData<GPU_Edge>(vulkanEdgesPath);
+        auto rawCars = loadBinaryData<GPU_Car>(vulkanCarsPath);
 
         for (auto &n: nodes) {
             n.lock = -1;
@@ -799,6 +849,16 @@ private:
 
         allExitNodes.assign(exitNodeSet.begin(), exitNodeSet.end());
         isExitOpen.resize(allExitNodes.size(), true);
+        exitFlowrateHistory.assign(allExitNodes.size(), std::vector<std::int32_t>());
+        exitLastEvacuatedCount.assign(allExitNodes.size(), 0);
+
+        // Apply config closed exits
+        for (std::int32_t nodeId: configClosedExits) {
+            if (auto it = std::ranges::find(allExitNodes, nodeId); it != allExitNodes.end()) {
+                const std::size_t idx = std::distance(allExitNodes.begin(), it);
+                isExitOpen[idx] = false;
+            }
+        }
     }
 
     void createComputePipeline() {
@@ -1158,30 +1218,35 @@ private:
 
         auto lastFrameTime = std::chrono::high_resolution_clock::now();
         double accumulatedSimTimeQueue = 0.;
-
-        // Take an initial snapshot so the UI has accurate stats on startup
-        takeSnapshot();
-
         double lastSnapshotSimTime = simTime;
 
-        while (glfwWindowShouldClose(window) == 0) {
-            glfwPollEvents();
-            if (glfwWindowShouldClose(window)) break;
+        takeSnapshot();
+
+        if (!isPaused && !hasStarted) {
+            applyParticipation();
+            hasStarted = true;
+        }
+
+        while (true) {
+            if (!isHeadless) {
+                glfwPollEvents();
+                if (glfwWindowShouldClose(window)) break;
+            } else {
+                if (simTime > 0.f && statRoad == 0) {
+                    std::println("Simulation finished: no cars on the road or all cars on the road stuck.");
+                    break;
+                }
+            }
 
             const auto currentFrameTime = std::chrono::high_resolution_clock::now();
             const std::chrono::duration<double> dt_duration = currentFrameTime - lastFrameTime;
             const double dt_real = dt_duration.count();
             lastFrameTime = currentFrameTime;
 
-            // Periodically take a snapshot to update statistics, run dynamic GPS rerouting, and check if finished
-            // Runs exactly every 60. seconds of simulation time, fully independent of real-world time
-            if (!isPaused && (simTime - lastSnapshotSimTime >= 60.)) {
+            if (!isPaused && simTime - lastSnapshotSimTime >= 60.f) {
                 takeSnapshot();
-
-                // Recalculate routes dynamically based on new car counts and congestion
                 recalculateGPS();
 
-                // Upload the newly updated cpuEdges array (specifically next_edge_idx) to VRAM
                 {
                     const vk::DeviceSize bufferSize = sizeof(GPU_Edge) * totalEdges;
                     auto [stagingBuffer, stagingMemory] = createBuffer(
@@ -1194,17 +1259,22 @@ private:
                     copyBuffer(*stagingBuffer, *edgeBuffer, bufferSize);
                 }
 
+                recordPeriodicHistory();
+
                 lastSnapshotSimTime = simTime;
 
-                // Stop simulation if finished (no active cars on the road and no cars left in the garage)
-                if (statRoad == 0 && statGarage == 0) {
-                    isPaused = true;
+                if (isHeadless) {
+                    std::println("Time: {:.1f}s | Garage: {} | Road: {} | Evacuated: {} | Stuck: {}",
+                                 simTime, statGarage, statRoad, statEvacuated, statStuck);
+                } else {
+                    if (statRoad == 0 && statGarage == 0) {
+                        isPaused = true;
+                    }
                 }
             }
 
-            // Read back the selected car's updated data, and its current edge/node, from the previous frame's copy
-            if (!isPaused && selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>(totalCars) && !cpuCars.
-                empty()) {
+            if (!isHeadless && !isPaused && selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>(totalCars)
+                && !cpuCars.empty()) {
                 {
                     const vk::DeviceSize offset = sizeof(GPU_Car) * selectedCarId;
                     const void *mappedData = carReadbackMemory->mapMemory(offset, sizeof(GPU_Car));
@@ -1229,210 +1299,212 @@ private:
                 }
             }
 
-            // --- THE FIX: Recreate the swapchain when the window resizes ---
-            if (framebufferResized) {
-                framebufferResized = false;
-                recreateSwapchain();
-            }
-
-            std::uint32_t imageIndex;
-            try {
-                auto [result, index] = swapchain->acquireNextImage(UINT64_MAX, *imageAvailableSemaphore, nullptr);
-                // Suboptimal usually means the window is resizing but hasn't settled yet
-                if (result == vk::Result::eSuboptimalKHR) {
-                    framebufferResized = true;
-                }
-                imageIndex = index;
-            } catch (const vk::OutOfDateKHRError &) {
-                // OutOfDate means the swapchain is completely invalid (e.g., monitor changed, maximized)
-                framebufferResized = false;
-                recreateSwapchain();
-                continue; // Restart the loop immediately with the new valid swapchain
-            }
-
-            // --- 1. START IMGUI FRAME ---
-            ImGui_ImplVulkan_NewFrame();
-            ImGui_ImplGlfw_NewFrame();
-            ImGui::NewFrame();
-
-            // --- 2. BUILD YOUR UI ---
-            ImGui::Begin("Simulation Control Panel");
-            ImGui::Text("Performance: %.3f ms/frame (%.1f FPS)", 1000.f / ImGui::GetIO().Framerate,
-                        ImGui::GetIO().Framerate);
-            ImGui::Separator();
-
-            // ==========================================
-            // --- EMERGENCY SCENARIO CONTROL ---
-            // ==========================================
-            ImGui::Separator();
-            ImGui::Text("--- EMERGENCY SCENARIO CONTROL ---");
-
-            bool routingChanged = false;
-
-
-            if (ImGui::Button("Open All Exits")) {
-                std::ranges::fill(isExitOpen, true);
-                routingChanged = true;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Close All Exits")) {
-                std::ranges::fill(isExitOpen, false);
-                routingChanged = true;
-            }
-
-            ImGui::Spacing();
-
-            ImGui::BeginDisabled(hasStarted);
-            ImGui::SliderFloat("Participation (%)", &participationPercentage, 0.f, 100.f, "%.1f%%");
-            ImGui::EndDisabled();
-
-            ImGui::Spacing();
-
-            if (routingChanged) {
-                triggerDynamicReroute();
-            }
-            // ==========================================
-
-            ImGui::Separator();
-
-            if (ImGui::Button(isPaused ? "Play Simulation" : "Pause Simulation", ImVec2(-1.f, 40.f))) {
-                if (!hasStarted) {
-                    applyParticipation();
-                    hasStarted = true;
-                }
-                isPaused = !isPaused;
-                if (isPaused) {
-                    takeSnapshot();
+            if (!isHeadless) {
+                if (framebufferResized) {
+                    framebufferResized = false;
+                    recreateSwapchain();
                 }
             }
-            ImGui::Spacing();
-            ImGui::SliderInt("Simulation Speed", &simSpeed, 1, 256, "%d x");
 
-            ImGui::Separator();
-            ImGui::Text("--- EVACUATION METRICS ---");
-            {
-                std::int32_t hours = static_cast<std::int32_t>(simTime) / 3600;
-                std::int32_t minutes = (static_cast<std::int32_t>(simTime) % 3600) / 60;
-                float seconds = std::fmod(simTime, 60.f);
-                ImGui::Text("Simulation Time: %02d:%02d:%04.1f", hours, minutes, seconds);
-            }
-            ImGui::Text("Waiting in Garage: %d", statGarage);
-            ImGui::Text("Active on Road: %d", statRoad);
-            ImGui::Text("Safely Evacuated: %d", statEvacuated);
-            ImGui::Text("Stuck Cars: %d", statStuck);
-            ImGui::Text("City Average Speed: %.1f km/h", statAvgSpeed * 3.6f);
+            std::uint32_t imageIndex = 0;
+            if (!isHeadless) {
+                try {
+                    auto [result, index] = swapchain->acquireNextImage(UINT64_MAX, *imageAvailableSemaphore, nullptr);
+                    if (result == vk::Result::eSuboptimalKHR) {
+                        framebufferResized = true;
+                    }
+                    imageIndex = index;
+                } catch (const vk::OutOfDateKHRError &) {
+                    framebufferResized = false;
+                    recreateSwapchain();
+                    continue;
+                }
 
-            // Progress Bar!
-            std::int32_t participatingCars = static_cast<std::int32_t>(totalCars) - statDisabled;
-            float progress = participatingCars > 0
-                                 ? static_cast<float>(statEvacuated) / static_cast<float>(participatingCars)
-                                 : 0.f;
-            std::string progressText = std::format("Evacuation Progress: {:.1f}%", progress * 100.f);
-            ImGui::ProgressBar(progress, ImVec2(-1.f, 0.f), progressText.c_str());
-
-            // Update Metrics History (Every 60 simulation seconds)
-            if (simTime - lastRecordTime >= 60.f) {
-                const auto flow = static_cast<float>(statEvacuated - lastEvacuatedCount); // cars per minute
-                flowrateHistory.push_back(flow);
-                evacuatedHistory.push_back(static_cast<float>(statEvacuated));
-                lastEvacuatedCount = statEvacuated;
-                lastRecordTime = simTime;
+                ImGui_ImplVulkan_NewFrame();
+                ImGui_ImplGlfw_NewFrame();
+                ImGui::NewFrame();
             }
 
-            if (!flowrateHistory.empty()) {
+            if (!isHeadless) {
+                ImGui::Begin("Simulation Control Panel");
+                ImGui::Text("Performance: %.3f ms/frame (%.1f FPS)", 1000.f / ImGui::GetIO().Framerate,
+                            ImGui::GetIO().Framerate);
+                ImGui::Separator();
+
+                ImGui::Separator();
+                ImGui::Text("--- EMERGENCY SCENARIO CONTROL ---");
+
+                bool routingChanged = false;
+
+                if (ImGui::Button("Open All Exits")) {
+                    std::ranges::fill(isExitOpen, true);
+                    routingChanged = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Close All Exits")) {
+                    std::ranges::fill(isExitOpen, false);
+                    routingChanged = true;
+                }
+
                 ImGui::Spacing();
-                ImGui::Text("--- CHARTS ---");
-                // Box chart (Histogram) for flow rate
-                std::string flowText = std::format("{:.0f} cars/min", flowrateHistory.back());
-                ImGui::PlotHistogram("Flowrate (cars/min)", flowrateHistory.data(),
-                                     static_cast<std::int32_t>(flowrateHistory.size()),
-                                     0, flowText.c_str(), 0.f, std::numeric_limits<float>::max(), ImVec2(0.f, 120.f));
 
-                // Line chart for total evacuated
-                std::string evacText = std::format("{:.0f} evacuated", evacuatedHistory.back());
-                ImGui::PlotLines("Total Evacuated", evacuatedHistory.data(),
-                                 static_cast<std::int32_t>(evacuatedHistory.size()),
-                                 0, evacText.c_str(), 0.f, std::numeric_limits<float>::max(), ImVec2(0.f, 120.f));
-            }
+                ImGui::BeginDisabled(hasStarted);
+                float participationFloat = static_cast<float>(participation);
+                if (ImGui::SliderFloat("Participation", &participationFloat, 0.f, 1.f, "%.2f")) {
+                    participation = static_cast<double>(participationFloat);
+                }
+                ImGui::EndDisabled();
 
-            if (!cpuCars.empty()) {
                 ImGui::Spacing();
-                selectedCarId = std::clamp(selectedCarId, 0, static_cast<std::int32_t>(totalCars) - 1);
 
-                GPU_Car &car = cpuCars[selectedCarId];
+                if (routingChanged) {
+                    triggerDynamicReroute();
+                }
 
-                ImGui::BeginChild("CarData", ImVec2(0, 150), true);
-                ImGui::Text("--- CAR %d ---", selectedCarId);
+                ImGui::Separator();
 
-                const char *stateStr = "Unknown";
-                if (car.state == CarState::Driving) stateStr = "Driving";
-                if (car.state == CarState::Queuing) stateStr = "Queuing at Intersection";
-                if (car.state == CarState::Evacuated) stateStr = "Evacuated!";
-                if (car.state == CarState::Garage) stateStr = "In Garage";
-                if (car.state == CarState::Stuck) stateStr = "Stuck";
+                if (ImGui::Button(isPaused ? "Play Simulation" : "Pause Simulation", ImVec2(-1.f, 40.f))) {
+                    if (!hasStarted) {
+                        applyParticipation();
+                        hasStarted = true;
+                    }
+                    isPaused = !isPaused;
+                    if (isPaused) {
+                        takeSnapshot();
+                    }
+                }
+                ImGui::Spacing();
+                ImGui::SliderInt("Simulation Speed", &simSpeed, 1, 256, "%d x");
 
-                ImGui::Text("State: %s (%d)", stateStr, car.state);
-                ImGui::Text("Speed: %.2f m/s (%.1f km/h)", car.speed, car.speed * 3.6f);
-                ImGui::Text("Position: %.2f meters", car.position);
-                ImGui::Text("Current Edge ID: %d", car.current_edge_idx);
-                ImGui::Text("Next Car in Linked List: %d", car.next_car_idx);
-                ImGui::EndChild();
+                ImGui::Separator();
+                ImGui::Text("--- EVACUATION METRICS ---");
+                {
+                    std::int32_t hours = static_cast<std::int32_t>(simTime) / 3600;
+                    std::int32_t minutes = (static_cast<std::int32_t>(simTime) % 3600) / 60;
+                    float seconds = std::fmod(simTime, 60.f);
+                    ImGui::Text("Simulation Time: %02d:%02d:%04.1f", hours, minutes, seconds);
+                }
+                ImGui::Text("Waiting in Garage: %d", statGarage);
+                ImGui::Text("Active on Road: %d", statRoad);
+                ImGui::Text("Safely Evacuated: %d", statEvacuated);
+                ImGui::Text("Stuck Cars: %d", statStuck);
+                ImGui::Text("City Average Speed: %.1f km/h", statAvgSpeed * 3.6f);
 
-                // If the car is on an edge, show the edge data too!
-                if (car.current_edge_idx != -1) {
-                    GPU_Edge &edge = cpuEdges[car.current_edge_idx];
-                    ImGui::BeginChild("EdgeData", ImVec2(0, 140), true);
-                    ImGui::Text("--- EDGE %d ---", car.current_edge_idx);
-                    ImGui::Text("Length: %.2f meters", edge.length);
-                    ImGui::Text("Max Speed: %.1f km/h", edge.max_speed * 3.6f);
-                    ImGui::Text("Head Car ID: %d", edge.head_car_idx);
-                    ImGui::Text("Target Node ID: %d", edge.end_node_idx);
-                    ImGui::Text("Spawn Capacity: %d", edge.spawn_capacity);
+                std::int32_t participatingCars = static_cast<std::int32_t>(totalCars) - statDisabled;
+                float progress = participatingCars > 0
+                                     ? static_cast<float>(statEvacuated) / static_cast<float>(participatingCars)
+                                     : 0.f;
+                std::string progressText = std::format("Evacuation Progress: {:.1f}%", progress * 100.f);
+                ImGui::ProgressBar(progress, ImVec2(-1.f, 0.f), progressText.c_str());
+
+                if (!flowrateHistory.empty()) {
+                    ImGui::Spacing();
+                    ImGui::Text("--- CHARTS ---");
+                    std::string flowText = std::format("{} cars/min", flowrateHistory.back());
+                    std::vector<float> flowrateHistoryFloat;
+                    flowrateHistoryFloat.reserve(flowrateHistory.size());
+                    for (const auto val: flowrateHistory) {
+                        flowrateHistoryFloat.push_back(static_cast<float>(val));
+                    }
+                    ImGui::PlotHistogram("Flowrate (cars/min)", flowrateHistoryFloat.data(),
+                                         static_cast<std::int32_t>(flowrateHistoryFloat.size()),
+                                         0, flowText.c_str(), 0.f, std::numeric_limits<float>::max(),
+                                         ImVec2(0.f, 120.f));
+
+                    std::string evacText = std::format("{} evacuated", evacuatedHistory.back());
+                    std::vector<float> evacuatedHistoryFloat;
+                    evacuatedHistoryFloat.reserve(evacuatedHistory.size());
+                    for (const auto val: evacuatedHistory) {
+                        evacuatedHistoryFloat.push_back(static_cast<float>(val));
+                    }
+                    ImGui::PlotLines("Total Evacuated", evacuatedHistoryFloat.data(),
+                                     static_cast<std::int32_t>(evacuatedHistoryFloat.size()),
+                                     0, evacText.c_str(), 0.f, std::numeric_limits<float>::max(), ImVec2(0.f, 120.f));
+                }
+
+                if (!cpuCars.empty()) {
+                    ImGui::Spacing();
+                    selectedCarId = std::clamp(selectedCarId, 0, static_cast<std::int32_t>(totalCars) - 1);
+
+                    GPU_Car &car = cpuCars[selectedCarId];
+
+                    ImGui::BeginChild("CarData", ImVec2(0, 150), true);
+                    ImGui::Text("--- CAR %d ---", selectedCarId);
+
+                    auto stateStr = "Unknown";
+                    if (car.state == CarState::Driving) stateStr = "Driving";
+                    if (car.state == CarState::Queuing) stateStr = "Queuing at Intersection";
+                    if (car.state == CarState::Evacuated) stateStr = "Evacuated!";
+                    if (car.state == CarState::Garage) stateStr = "In Garage";
+                    if (car.state == CarState::Stuck) stateStr = "Stuck";
+
+                    ImGui::Text("State: %s (%d)", stateStr, car.state);
+                    ImGui::Text("Speed: %.2f m/s (%.1f km/h)", car.speed, car.speed * 3.6f);
+                    ImGui::Text("Position: %.2f meters", car.position);
+                    ImGui::Text("Current Edge ID: %d", car.current_edge_idx);
+                    ImGui::Text("Next Car in Linked List: %d", car.next_car_idx);
                     ImGui::EndChild();
+
+                    if (car.current_edge_idx != -1) {
+                        GPU_Edge &edge = cpuEdges[car.current_edge_idx];
+                        ImGui::BeginChild("EdgeData", ImVec2(0, 140), true);
+                        ImGui::Text("--- EDGE %d ---", car.current_edge_idx);
+                        ImGui::Text("Length: %.2f meters", edge.length);
+                        ImGui::Text("Max Speed: %.1f km/h", edge.max_speed * 3.6f);
+                        ImGui::Text("Head Car ID: %d", edge.head_car_idx);
+                        ImGui::Text("Target Node ID: %d", edge.end_node_idx);
+                        ImGui::Text("Spawn Capacity: %d", edge.spawn_capacity);
+                        ImGui::EndChild();
+                    }
                 }
+                ImGui::End();
+
+                if (isSelecting) {
+                    ImDrawList *drawList = ImGui::GetForegroundDrawList();
+                    ImVec2 p_min(
+                        static_cast<float>(std::min(startMouseX, currentMouseX)),
+                        static_cast<float>(std::min(startMouseY, currentMouseY))
+                    );
+                    ImVec2 p_max(
+                        static_cast<float>(std::max(startMouseX, currentMouseX)),
+                        static_cast<float>(std::max(startMouseY, currentMouseY))
+                    );
+                    drawList->AddRectFilled(p_min, p_max, IM_COL32(0, 150, 255, 60), 0.f);
+                    drawList->AddRect(p_min, p_max, IM_COL32(0, 150, 255, 255), 0.f, 0, 2.f);
+                }
+
+                if (isInspecting) {
+                    ImDrawList *drawList = ImGui::GetForegroundDrawList();
+                    ImVec2 center(static_cast<float>(inspectMouseX), static_cast<float>(inspectMouseY));
+                    float r = worldDistanceToPixels(20.f / 111300.f);
+                    drawList->AddCircleFilled(center, r, IM_COL32(255, 165, 0, 40), 64);
+                    drawList->AddCircle(center, r, IM_COL32(255, 165, 0, 180), 64, 2.f);
+                }
+
+                ImGui::Render();
             }
-            ImGui::End();
-
-            if (isSelecting) {
-                ImDrawList *drawList = ImGui::GetForegroundDrawList();
-                ImVec2 p_min(
-                    static_cast<float>(std::min(startMouseX, currentMouseX)),
-                    static_cast<float>(std::min(startMouseY, currentMouseY))
-                );
-                ImVec2 p_max(
-                    static_cast<float>(std::max(startMouseX, currentMouseX)),
-                    static_cast<float>(std::max(startMouseY, currentMouseY))
-                );
-                drawList->AddRectFilled(p_min, p_max, IM_COL32(0, 150, 255, 60), 0.f);
-                drawList->AddRect(p_min, p_max, IM_COL32(0, 150, 255, 255), 0.f, 0, 2.f);
-            }
-
-            if (isInspecting) {
-                ImDrawList *drawList = ImGui::GetForegroundDrawList();
-                ImVec2 center(static_cast<float>(inspectMouseX), static_cast<float>(inspectMouseY));
-                float r = worldDistanceToPixels(20.f / 111300.f); // 20 meters selection radius in degrees
-                drawList->AddCircleFilled(center, r, IM_COL32(255, 165, 0, 40), 64);
-                drawList->AddCircle(center, r, IM_COL32(255, 165, 0, 180), 64, 2.f);
-            }
-
-
-            // --- 3. FINALIZE UI DATA ---
-            ImGui::Render();
 
             constexpr vk::CommandBufferBeginInfo cmdBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
             cmd.begin(cmdBeginInfo);
 
             std::int32_t stepsToRun = 0;
-            if (!isPaused) {
-                const double capped_dt = std::min(dt_real, 0.033);
-                accumulatedSimTimeQueue += capped_dt * simSpeed;
-                while (accumulatedSimTimeQueue >= 0.1) {
-                    stepsToRun++;
-                    accumulatedSimTimeQueue -= 0.1;
-                }
-                if (stepsToRun > 256) {
-                    stepsToRun = 256;
-                    accumulatedSimTimeQueue = 0.;
+            if (isHeadless) {
+                const float timeToNextSnapshot = 60.f - (simTime - lastSnapshotSimTime);
+                stepsToRun = static_cast<std::int32_t>(timeToNextSnapshot / 0.1f);
+                if (stepsToRun <= 0) stepsToRun = 1;
+                if (stepsToRun > 600) stepsToRun = 600;
+            } else {
+                if (!isPaused) {
+                    const double capped_dt = std::min(dt_real, 0.033);
+                    accumulatedSimTimeQueue += capped_dt * simSpeed;
+                    while (accumulatedSimTimeQueue >= 0.1) {
+                        stepsToRun++;
+                        accumulatedSimTimeQueue -= 0.1;
+                    }
+                    if (stepsToRun > 256) {
+                        stepsToRun = 256;
+                        accumulatedSimTimeQueue = 0.;
+                    }
                 }
             }
 
@@ -1451,7 +1523,6 @@ private:
                     const vk::BufferMemoryBarrier edgeBarrier{
                         .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
                         .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                         .buffer = **edgeBuffer, .offset = 0, .size = VK_WHOLE_SIZE
                     };
                     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
@@ -1463,7 +1534,6 @@ private:
                     const vk::BufferMemoryBarrier carBarrier{
                         .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
                         .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                         .buffer = **carBuffer, .offset = 0, .size = VK_WHOLE_SIZE
                     };
                     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
@@ -1472,9 +1542,9 @@ private:
                     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, **physicsPipeline);
                     cmd.dispatch((totalCars + 255) / 256, 1, 1);
 
-                    vk::PipelineStageFlags dstStage = (step == stepsToRun - 1)
-                                                          ? vk::PipelineStageFlagBits::eVertexShader
-                                                          : vk::PipelineStageFlagBits::eComputeShader;
+                    vk::PipelineStageFlags dstStage = isHeadless || step < stepsToRun - 1
+                                                          ? vk::PipelineStageFlagBits::eComputeShader
+                                                          : vk::PipelineStageFlagBits::eVertexShader;
                     constexpr vk::MemoryBarrier stepBarrier{
                         .srcAccessMask = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead,
                         .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite
@@ -1483,158 +1553,138 @@ private:
                                         nullptr);
                 }
 
-                // Copy the selected car's, its edge's, and target node's data back to the host visible buffer for dynamic inspection
-                std::int32_t inspectEdgeIdx = -1;
-                std::int32_t inspectNodeIdx = -1;
-                if (selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>(totalCars) && !cpuCars.empty()) {
-                    inspectEdgeIdx = cpuCars[selectedCarId].current_edge_idx;
-                    if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<std::int32_t>(totalEdges)) {
-                        inspectNodeIdx = cpuEdges[inspectEdgeIdx].end_node_idx;
+                if (!isHeadless) {
+                    std::int32_t inspectEdgeIdx = -1;
+                    std::int32_t inspectNodeIdx = -1;
+                    if (selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>(totalCars) && !cpuCars.
+                        empty()) {
+                        inspectEdgeIdx = cpuCars[selectedCarId].current_edge_idx;
+                        if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<std::int32_t>(totalEdges)) {
+                            inspectNodeIdx = cpuEdges[inspectEdgeIdx].end_node_idx;
+                        }
                     }
-                }
 
-                std::vector<vk::BufferMemoryBarrier> barriers;
-                if (selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>(totalCars)) {
-                    barriers.push_back(vk::BufferMemoryBarrier{
-                        .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
-                        .dstAccessMask = vk::AccessFlagBits::eTransferRead,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .buffer = **carBuffer,
-                        .offset = sizeof(GPU_Car) * selectedCarId,
-                        .size = sizeof(GPU_Car)
-                    });
-                }
-                if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<std::int32_t>(totalEdges)) {
-                    barriers.push_back(vk::BufferMemoryBarrier{
-                        .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
-                        .dstAccessMask = vk::AccessFlagBits::eTransferRead,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .buffer = **edgeBuffer,
-                        .offset = sizeof(GPU_Edge) * inspectEdgeIdx,
-                        .size = sizeof(GPU_Edge)
-                    });
-                }
-                if (inspectNodeIdx >= 0 && inspectNodeIdx < static_cast<std::int32_t>(cpuNodes.size())) {
-                    barriers.push_back(vk::BufferMemoryBarrier{
-                        .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
-                        .dstAccessMask = vk::AccessFlagBits::eTransferRead,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .buffer = **nodeBuffer,
-                        .offset = sizeof(GPU_Node) * inspectNodeIdx,
-                        .size = sizeof(GPU_Node)
-                    });
-                }
+                    std::vector<vk::BufferMemoryBarrier> barriers;
+                    if (selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>(totalCars)) {
+                        barriers.push_back(vk::BufferMemoryBarrier{
+                            .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+                            .dstAccessMask = vk::AccessFlagBits::eTransferRead, .buffer = **carBuffer,
+                            .offset = sizeof(GPU_Car) * selectedCarId, .size = sizeof(GPU_Car)
+                        });
+                    }
+                    if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<std::int32_t>(totalEdges)) {
+                        barriers.push_back(vk::BufferMemoryBarrier{
+                            .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+                            .dstAccessMask = vk::AccessFlagBits::eTransferRead, .buffer = **edgeBuffer,
+                            .offset = sizeof(GPU_Edge) * inspectEdgeIdx, .size = sizeof(GPU_Edge)
+                        });
+                    }
+                    if (inspectNodeIdx >= 0 && inspectNodeIdx < static_cast<std::int32_t>(cpuNodes.size())) {
+                        barriers.push_back(vk::BufferMemoryBarrier{
+                            .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+                            .dstAccessMask = vk::AccessFlagBits::eTransferRead, .buffer = **nodeBuffer,
+                            .offset = sizeof(GPU_Node) * inspectNodeIdx, .size = sizeof(GPU_Node)
+                        });
+                    }
 
-                if (!barriers.empty()) {
-                    cmd.pipelineBarrier(
-                        vk::PipelineStageFlagBits::eComputeShader,
-                        vk::PipelineStageFlagBits::eTransfer,
-                        {},
-                        nullptr,
-                        barriers,
-                        nullptr
-                    );
-                }
+                    if (!barriers.empty()) {
+                        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                                            vk::PipelineStageFlagBits::eTransfer, {}, nullptr, barriers, nullptr);
+                    }
 
-                if (selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>(totalCars)) {
-                    const vk::BufferCopy copyRegion{
-                        .srcOffset = sizeof(GPU_Car) * selectedCarId,
-                        .dstOffset = sizeof(GPU_Car) * selectedCarId,
-                        .size = sizeof(GPU_Car)
-                    };
-                    cmd.copyBuffer(**carBuffer, **carReadbackBuffer, copyRegion);
-                }
-                if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<std::int32_t>(totalEdges)) {
-                    const vk::BufferCopy copyRegion{
-                        .srcOffset = sizeof(GPU_Edge) * inspectEdgeIdx,
-                        .dstOffset = sizeof(GPU_Edge) * inspectEdgeIdx,
-                        .size = sizeof(GPU_Edge)
-                    };
-                    cmd.copyBuffer(**edgeBuffer, **edgeReadbackBuffer, copyRegion);
-                }
-                if (inspectNodeIdx >= 0 && inspectNodeIdx < static_cast<std::int32_t>(cpuNodes.size())) {
-                    const vk::BufferCopy copyRegion{
-                        .srcOffset = sizeof(GPU_Node) * inspectNodeIdx,
-                        .dstOffset = sizeof(GPU_Node) * inspectNodeIdx,
-                        .size = sizeof(GPU_Node)
-                    };
-                    cmd.copyBuffer(**nodeBuffer, **nodeReadbackBuffer, copyRegion);
+                    if (selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>(totalCars)) {
+                        cmd.copyBuffer(**carBuffer, **carReadbackBuffer, vk::BufferCopy{
+                                           .srcOffset = sizeof(GPU_Car) * selectedCarId,
+                                           .dstOffset = sizeof(GPU_Car) * selectedCarId, .size = sizeof(GPU_Car)
+                                       });
+                    }
+                    if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<std::int32_t>(totalEdges)) {
+                        cmd.copyBuffer(**edgeBuffer, **edgeReadbackBuffer, vk::BufferCopy{
+                                           .srcOffset = sizeof(GPU_Edge) * inspectEdgeIdx,
+                                           .dstOffset = sizeof(GPU_Edge) * inspectEdgeIdx, .size = sizeof(GPU_Edge)
+                                       });
+                    }
+                    if (inspectNodeIdx >= 0 && inspectNodeIdx < static_cast<std::int32_t>(cpuNodes.size())) {
+                        cmd.copyBuffer(**nodeBuffer, **nodeReadbackBuffer, vk::BufferCopy{
+                                           .srcOffset = sizeof(GPU_Node) * inspectNodeIdx,
+                                           .dstOffset = sizeof(GPU_Node) * inspectNodeIdx, .size = sizeof(GPU_Node)
+                                       });
+                    }
                 }
             }
 
-            const vk::RenderPassBeginInfo renderPassInfo{
-                .renderPass = **renderPass, .framebuffer = *framebuffers[imageIndex],
-                .renderArea = {.offset = {0, 0}, .extent = swapchainExtent}, .clearValueCount = 1,
-                .pClearValues = &clearColor
-            };
-            cmd.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
+            if (!isHeadless) {
+                const vk::RenderPassBeginInfo renderPassInfo{
+                    .renderPass = **renderPass, .framebuffer = *framebuffers[imageIndex],
+                    .renderArea = {.offset = {0, 0}, .extent = swapchainExtent}, .clearValueCount = 1,
+                    .pClearValues = &clearColor
+                };
+                cmd.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
 
-            // Set Dynamic Viewport & Scissor
-            const vk::Viewport dynamicViewport{
-                .x = 0.f, .y = 0.f, .width = static_cast<float>(swapchainExtent.width),
-                .height = static_cast<float>(swapchainExtent.height), .minDepth = 0.f, .maxDepth = 1.f
-            };
-            cmd.setViewport(0, dynamicViewport);
-            const vk::Rect2D dynamicScissor{.offset = {0, 0}, .extent = swapchainExtent};
-            cmd.setScissor(0, dynamicScissor);
+                const vk::Viewport dynamicViewport{
+                    .x = 0.f, .y = 0.f, .width = static_cast<float>(swapchainExtent.width),
+                    .height = static_cast<float>(swapchainExtent.height), .minDepth = 0.f, .maxDepth = 1.f
+                };
+                cmd.setViewport(0, dynamicViewport);
+                const vk::Rect2D dynamicScissor{.offset = {0, 0}, .extent = swapchainExtent};
+                cmd.setScissor(0, dynamicScissor);
 
-            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **streetPipeline);
+                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **streetPipeline);
 
-            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, **graphicsPipelineLayout, 0,
-                                   {*computeDescriptorSets[0]}, nullptr);
-            mapBounds.selected_car_id = selectedCarId;
-            cmd.pushConstants<GraphicsConstants>(**graphicsPipelineLayout, vk::ShaderStageFlagBits::eAllGraphics, 0,
-                                                 mapBounds);
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, **graphicsPipelineLayout, 0,
+                                       {*computeDescriptorSets[0]}, nullptr);
+                mapBounds.selected_car_id = selectedCarId;
+                cmd.pushConstants<GraphicsConstants>(**graphicsPipelineLayout, vk::ShaderStageFlagBits::eAllGraphics, 0,
+                                                     mapBounds);
 
-            // Draw the Map
-            cmd.draw(2, totalEdges, 0, 0);
+                // Draw the Map
+                cmd.draw(2, totalEdges, 0, 0);
 
-            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **graphicsPipeline);
-            cmd.draw(6, totalCars, 0, 0);
+                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **graphicsPipeline);
+                cmd.draw(6, totalCars, 0, 0);
 
-            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **exitNodePipeline);
-            cmd.draw(6, totalEdges, 0, 0);
+                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **exitNodePipeline);
+                cmd.draw(6, totalEdges, 0, 0);
 
-            // --- 4. DRAW IMGUI ON TOP OF THE MAP ---
-            // ImGui uses its OWN internal pipeline and push constants.
-            // By calling it LAST, it ignores the mapBounds we pushed above!
-            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *cmd);
+                ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *cmd);
+                cmd.endRenderPass();
+            }
 
-            cmd.endRenderPass();
             cmd.end();
 
-            constexpr std::array<vk::PipelineStageFlags, 1> waitStages = {
-                vk::PipelineStageFlagBits::eColorAttachmentOutput
-            };
-            const vk::SubmitInfo submitInfo{
-                .waitSemaphoreCount = 1, .pWaitSemaphores = &(*imageAvailableSemaphore),
-                .pWaitDstStageMask = waitStages.data(), .commandBufferCount = 1, .pCommandBuffers = &(*cmd),
-                .signalSemaphoreCount = 1, .pSignalSemaphores = &(*renderFinishedSemaphore)
-            };
-            queue->submit(submitInfo, nullptr);
+            if (isHeadless) {
+                queue->submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*cmd}, nullptr);
+                queue->waitIdle();
+                takeSnapshot();
+            } else {
+                constexpr vk::PipelineStageFlags waitStages = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+                const vk::SubmitInfo submitInfo{
+                    .waitSemaphoreCount = 1, .pWaitSemaphores = &(*imageAvailableSemaphore),
+                    .pWaitDstStageMask = &waitStages, .commandBufferCount = 1, .pCommandBuffers = &(*cmd),
+                    .signalSemaphoreCount = 1, .pSignalSemaphores = &(*renderFinishedSemaphore)
+                };
+                queue->submit(submitInfo, nullptr);
 
-            const vk::PresentInfoKHR presentInfo{
-                .waitSemaphoreCount = 1, .pWaitSemaphores = &(*renderFinishedSemaphore), .swapchainCount = 1,
-                .pSwapchains = &(**swapchain), .pImageIndices = &imageIndex
-            };
+                const vk::PresentInfoKHR presentInfo{
+                    .waitSemaphoreCount = 1, .pWaitSemaphores = &(*renderFinishedSemaphore), .swapchainCount = 1,
+                    .pSwapchains = &(**swapchain), .pImageIndices = &imageIndex
+                };
 
-            try {
-                auto presentResult = queue->presentKHR(presentInfo);
-                if (presentResult == vk::Result::eSuboptimalKHR || framebufferResized) {
+                try {
+                    auto presentResult = queue->presentKHR(presentInfo);
+                    if (presentResult == vk::Result::eSuboptimalKHR || framebufferResized) {
+                        framebufferResized = false;
+                        recreateSwapchain();
+                    }
+                } catch (const vk::OutOfDateKHRError &) {
                     framebufferResized = false;
                     recreateSwapchain();
                 }
-            } catch (const vk::OutOfDateKHRError &) {
-                framebufferResized = false;
-                recreateSwapchain();
+                queue->waitIdle();
             }
-
-            queue->waitIdle();
         }
         device->waitIdle();
+        saveResults();
     }
 
     void takeSnapshot() {
@@ -1703,9 +1753,9 @@ private:
     // Converts raw GLFW window pixels into Vienna World Coordinates (Meters)
     void screenToWorld(const double screenX, const double screenY, float &outWorldX, float &outWorldY) const {
         // 1. Convert Screen Pixels to Normalized Device Coordinates (NDC: -1. to 1.)
-        float ndcX = (static_cast<float>(screenX) / static_cast<float>(swapchainExtent.width)) * 2.f - 1.f;
+        float ndcX = static_cast<float>(screenX) / static_cast<float>(swapchainExtent.width) * 2.f - 1.f;
         // Vulkan's Y axis points down, but our world map points up, so we invert Y
-        const float ndcY = -((static_cast<float>(screenY) / static_cast<float>(swapchainExtent.height)) * 2.f - 1.f);
+        const float ndcY = -(static_cast<float>(screenY) / static_cast<float>(swapchainExtent.height) * 2.f - 1.f);
 
         // 2. Reverse the Aspect Ratio correction
         ndcX *= mapBounds.aspect_ratio;
@@ -1749,7 +1799,7 @@ private:
             // Calculate distance squared to the mouse click
             const float dx = carWorldX - worldX;
             const float dy = carWorldY - worldY;
-            const float distSq = (dx * dx) + (dy * dy);
+            const float distSq = dx * dx + dy * dy;
 
             // Find the absolute closest car
             if (distSq < closestDistSq) {
@@ -1788,7 +1838,7 @@ private:
                 const float ey = cpuNodes[allExitNodes[i]].y;
                 const float dx = ex - startWorldX;
                 const float dy = ey - startWorldY;
-                const float distSq = (dx * dx) + (dy * dy);
+                const float distSq = dx * dx + dy * dy;
                 if (distSq < closestDistSq) {
                     closestDistSq = distSq;
                     closestExitIdx = static_cast<std::int32_t>(i);
@@ -1823,11 +1873,85 @@ private:
             triggerDynamicReroute();
         }
     }
+
+    void recordPeriodicHistory() {
+        const std::int32_t flow = statEvacuated - lastEvacuatedCount; // cars per minute
+        flowrateHistory.push_back(flow);
+        evacuatedHistory.push_back(statEvacuated);
+        lastEvacuatedCount = statEvacuated;
+
+        garageHistory.push_back(statGarage);
+        roadHistory.push_back(statRoad);
+        stuckHistory.push_back(statStuck);
+        avgSpeedHistory.push_back(statAvgSpeed * 3.6f);
+
+        std::vector currentEvacCount(allExitNodes.size(), 0);
+        for (const auto &car: cpuCars) {
+            if (car.state == CarState::Evacuated) {
+                if (car.current_edge_idx >= 0 && car.current_edge_idx < static_cast<std::int32_t>(totalEdges)) {
+                    std::int32_t endNode = cpuEdges[car.current_edge_idx].end_node_idx;
+                    if (auto it = std::ranges::find(allExitNodes, endNode); it != allExitNodes.end()) {
+                        const std::size_t exitIdx = std::distance(allExitNodes.begin(), it);
+                        currentEvacCount[exitIdx]++;
+                    }
+                }
+            }
+        }
+
+        for (std::size_t i = 0; i < allExitNodes.size(); ++i) {
+            std::int32_t exitFlow = currentEvacCount[i] - exitLastEvacuatedCount[i];
+            exitFlowrateHistory[i].push_back(exitFlow);
+            exitLastEvacuatedCount[i] = currentEvacCount[i];
+        }
+
+        lastRecordTime = simTime;
+    }
+
+    void saveResults() {
+        nlohmann::json results;
+        results["vulkan_nodes_path"] = vulkanNodesPath;
+        results["vulkan_edges_path"] = vulkanEdgesPath;
+        results["vulkan_cars_path"] = vulkanCarsPath;
+        results["participation"] = participation;
+        results["total_cars"] = totalCars;
+        results["simulation_time_seconds"] = simTime;
+
+
+        results["history"]["flowrate_cars_per_min"] = flowrateHistory;
+        results["history"]["evacuated_cumulative"] = evacuatedHistory;
+        results["history"]["waiting_in_garage"] = garageHistory;
+        results["history"]["active_on_road"] = roadHistory;
+        results["history"]["stuck_cars"] = stuckHistory;
+        results["history"]["city_average_speed_kmh"] = avgSpeedHistory;
+
+        nlohmann::json exitsJson = nlohmann::json::array();
+        for (std::size_t i = 0; i < allExitNodes.size(); ++i) {
+            nlohmann::json exitItem;
+            exitItem["exit_index"] = i;
+            exitItem["node_id"] = allExitNodes[i];
+            exitItem["is_open"] = isExitOpen[i];
+            exitItem["flowrate_history_cars_per_min"] = exitFlowrateHistory[i];
+            exitsJson.push_back(exitItem);
+        }
+        results["exits"] = exitsJson;
+
+        if (std::ofstream out(outputFilePath); out.is_open()) {
+            out << results.dump(4);
+            std::println("Simulation results saved to {}", outputFilePath);
+        } else {
+            std::println("Error: Could not open output file {} to write results.", outputFilePath);
+        }
+    }
 };
 
-auto main() -> std::int32_t {
+auto main(const std::int32_t argc, const char *argv[]) -> std::int32_t {
+    std::string configPath = "config.json";
+    if (argc > 1) {
+        configPath = argv[1];
+    }
     try {
         EvacuationEngine engine{};
+        engine.loadConfig(configPath);
         engine.run();
     } catch (const std::exception &e) {
         std::println(std::cerr, "Fatal GPU Error: {}", e.what());

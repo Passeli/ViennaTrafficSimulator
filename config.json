@@ -1,0 +1,9 @@
+{
+    "vulkan_nodes_path": "vulkan_nodes.bin",
+    "vulkan_edges_path": "vulkan_edges.bin",
+    "vulkan_cars_path": "vulkan_cars.bin",
+    "headless": false,
+    "output_file": "results.json",
+    "participation": 1.00,
+    "closed_exits": []
+}

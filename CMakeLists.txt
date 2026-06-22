@@ -31,6 +31,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
+# Fetch nlohmann_json
+FetchContent_Declare(
+        json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG v3.11.3
+)
+FetchContent_MakeAvailable(json)
+
 # ImGui doesn't have a native CMakeLists.txt, so we build it manually using the downloaded source
 add_library(imgui STATIC
         ${imgui_SOURCE_DIR}/imgui.cpp
@@ -54,11 +62,12 @@ target_link_libraries(imgui PUBLIC glfw)
 # 3. Create the executable
 add_executable(BA main.cpp)
 
-# 4. Link the necessary libraries (Added ImGui!)
+# 4. Link the necessary libraries (Added ImGui and json!)
 target_link_libraries(BA PRIVATE
         Vulkan::Vulkan
         glfw
         imgui
+        nlohmann_json::nlohmann_json
 )
 
 # 5. Enable dynamic dispatch for Vulkan-Hpp for maximum performance
@@ -164,9 +173,12 @@ set(NODE_BIN_SRC "${CMAKE_SOURCE_DIR}/vulkan_nodes.bin")
 set(EDGE_BIN_SRC "${CMAKE_SOURCE_DIR}/vulkan_edges.bin")
 set(CAR_BIN_SRC "${CMAKE_SOURCE_DIR}/vulkan_cars.bin")
 
+set(CONFIG_SRC "${CMAKE_SOURCE_DIR}/config.json")
+
 set(NODE_BIN_DST "${CMAKE_CURRENT_BINARY_DIR}/vulkan_nodes.bin")
 set(EDGE_BIN_DST "${CMAKE_CURRENT_BINARY_DIR}/vulkan_edges.bin")
 set(CAR_BIN_DST "${CMAKE_CURRENT_BINARY_DIR}/vulkan_cars.bin")
+set(CONFIG_DST "${CMAKE_CURRENT_BINARY_DIR}/config.json")
 
 add_custom_command(
         OUTPUT ${NODE_BIN_DST}
@@ -183,10 +195,16 @@ add_custom_command(
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CAR_BIN_SRC} ${CAR_BIN_DST}
         DEPENDS ${CAR_BIN_SRC}
 )
+add_custom_command(
+        OUTPUT ${CONFIG_DST}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CONFIG_SRC} ${CONFIG_DST}
+        DEPENDS ${CONFIG_SRC}
+)
 
 add_custom_target(CopyBinaryMaps DEPENDS
         ${NODE_BIN_DST}
         ${EDGE_BIN_DST}
         ${CAR_BIN_DST}
+        ${CONFIG_DST}
 )
 add_dependencies(BA CopyBinaryMaps)
