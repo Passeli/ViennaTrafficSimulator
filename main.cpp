@@ -707,8 +707,6 @@ private:
     }
 
     void loadMapDataAndCreateBuffers() {
-        std::println("Loading binary data into RAM...");
-
         auto nodes = loadBinaryData<GPU_Node>("vulkan_nodes.bin");
         auto rawEdges = loadBinaryData<GPU_Edge>("vulkan_edges.bin");
         auto rawCars = loadBinaryData<GPU_Car>("vulkan_cars.bin");
@@ -1158,7 +1156,7 @@ private:
             .color = vk::ClearColorValue{std::array<float, 4>{0.05f, 0.05f, 0.1f, 1.f}}
         };
 
-        double lastFrameTime = glfwGetTime();
+        auto lastFrameTime = std::chrono::high_resolution_clock::now();
         double accumulatedSimTimeQueue = 0.;
 
         // Take an initial snapshot so the UI has accurate stats on startup
@@ -1170,8 +1168,9 @@ private:
             glfwPollEvents();
             if (glfwWindowShouldClose(window)) break;
 
-            const double currentFrameTime = glfwGetTime();
-            const double dt_real = currentFrameTime - lastFrameTime;
+            const auto currentFrameTime = std::chrono::high_resolution_clock::now();
+            const std::chrono::duration<double> dt_duration = currentFrameTime - lastFrameTime;
+            const double dt_real = dt_duration.count();
             lastFrameTime = currentFrameTime;
 
             // Periodically take a snapshot to update statistics, run dynamic GPS rerouting, and check if finished
