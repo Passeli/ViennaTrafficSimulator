@@ -852,13 +852,23 @@ private:
         exitFlowrateHistory.assign(allExitNodes.size(), std::vector<std::int32_t>());
         exitLastEvacuatedCount.assign(allExitNodes.size(), 0);
 
-        // Apply config closed exits
-        for (std::int32_t nodeId: configClosedExits) {
-            if (auto it = std::ranges::find(allExitNodes, nodeId); it != allExitNodes.end()) {
+        // Apply config closed exits (supports both exit index 0-124 and global node index)
+        for (std::int32_t entry: configClosedExits) {
+            if (entry >= 0 && entry < static_cast<std::int32_t>(allExitNodes.size())) {
+                isExitOpen[entry] = false;
+            }
+            if (auto it = std::ranges::find(allExitNodes, entry); it != allExitNodes.end()) {
                 const std::size_t idx = std::distance(allExitNodes.begin(), it);
                 isExitOpen[idx] = false;
             }
         }
+
+        // Run initial GPS recalculation to bake the closed exits routing and node states
+        recalculateGPS();
+
+        // Re-upload the updated nodes and edges to the GPU
+        uploadVectorToGPU<GPU_Node>(cpuNodes, nodeBuffer, nodeMemory);
+        uploadVectorToGPU<GPU_Edge>(cpuEdges, edgeBuffer, edgeMemory);
     }
 
     void createComputePipeline() {
