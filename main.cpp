@@ -22,11 +22,11 @@
 #include "common.hpp"
 
 template<typename T>
-auto loadBinaryData(const std::string_view filepath) -> std::vector<T> {
-    std::ifstream file{std::string(filepath), std::ios::binary | std::ios::ate};
+std::vector<T> loadBinaryData(const std::string_view filepath) {
+    std::ifstream file{std::string{filepath}, std::ios::binary | std::ios::ate};
 
     if (!file.is_open()) {
-        throw std::runtime_error{"Failed to open: " + std::string(filepath)};
+        throw std::runtime_error{"Failed to open: " + std::string{filepath}};
     }
 
     const std::streamsize fileSize = file.tellg();
@@ -54,7 +54,7 @@ public:
     std::vector<std::int32_t> configClosedExits;
 
     void loadConfig(const std::string &configPath) {
-        std::ifstream f(configPath);
+        std::ifstream f{configPath};
         if (!f.is_open()) {
             std::println("Could not open config file: {}. Using default settings.", configPath);
             isPaused = !isHeadless;
@@ -62,15 +62,24 @@ public:
         }
         try {
             nlohmann::json data = nlohmann::json::parse(f);
-            if (data.contains("vulkan_nodes_path")) vulkanNodesPath = data["vulkan_nodes_path"].get<std::string>();
-            if (data.contains("vulkan_edges_path")) vulkanEdgesPath = data["vulkan_edges_path"].get<std::string>();
-            if (data.contains("vulkan_cars_path")) vulkanCarsPath = data["vulkan_cars_path"].get<std::string>();
-            if (data.contains("headless")) isHeadless = data["headless"].get<bool>();
-            if (data.contains("output_file")) outputFilePath = data["output_file"].get<std::string>();
-
-            if (data.contains("participation"))
+            if (data.contains("vulkan_nodes_path")) {
+                vulkanNodesPath = data["vulkan_nodes_path"].get<std::string>();
+            }
+            if (data.contains("vulkan_edges_path")) {
+                vulkanEdgesPath = data["vulkan_edges_path"].get<std::string>();
+            }
+            if (data.contains("vulkan_cars_path")) {
+                vulkanCarsPath = data["vulkan_cars_path"].get<std::string>();
+            }
+            if (data.contains("headless")) {
+                isHeadless = data["headless"].get<bool>();
+            }
+            if (data.contains("output_file")) {
+                outputFilePath = data["output_file"].get<std::string>();
+            }
+            if (data.contains("participation")) {
                 participation = data["participation"].get<double>();
-
+            }
             if (data.contains("closed_exits")) {
                 configClosedExits = data["closed_exits"].get<std::vector<std::int32_t> >();
             }
@@ -104,8 +113,8 @@ public:
     }
 
     ~EvacuationEngine() {
-        if (device) {
-            device->waitIdle();
+        if (*device) {
+            device.waitIdle();
             if (imguiInitialized) {
                 ImGui_ImplVulkan_Shutdown();
                 ImGui_ImplGlfw_Shutdown();
@@ -121,29 +130,29 @@ public:
 private:
     GLFWwindow *window = nullptr;
 
-    std::unique_ptr<vk::raii::Context> context;
-    std::unique_ptr<vk::raii::Instance> instance;
-    std::unique_ptr<vk::raii::PhysicalDevice> physicalDevice;
-    std::unique_ptr<vk::raii::Device> device;
+    vk::raii::Context context;
+    vk::raii::Instance instance = nullptr;
+    vk::raii::PhysicalDevice physicalDevice = nullptr;
+    vk::raii::Device device = nullptr;
 
     std::uint32_t queueFamilyIndex = 0;
-    std::unique_ptr<vk::raii::Queue> queue;
-    std::unique_ptr<vk::raii::CommandPool> commandPool;
+    vk::raii::Queue queue = nullptr;
+    vk::raii::CommandPool commandPool = nullptr;
 
-    std::unique_ptr<vk::raii::Buffer> nodeBuffer;
-    std::unique_ptr<vk::raii::DeviceMemory> nodeMemory;
-    std::unique_ptr<vk::raii::Buffer> edgeBuffer;
-    std::unique_ptr<vk::raii::DeviceMemory> edgeMemory;
-    std::unique_ptr<vk::raii::Buffer> carBuffer;
-    std::unique_ptr<vk::raii::DeviceMemory> carMemory;
+    vk::raii::Buffer nodeBuffer = nullptr;
+    vk::raii::DeviceMemory nodeMemory = nullptr;
+    vk::raii::Buffer edgeBuffer = nullptr;
+    vk::raii::DeviceMemory edgeMemory = nullptr;
+    vk::raii::Buffer carBuffer = nullptr;
+    vk::raii::DeviceMemory carMemory = nullptr;
 
-    std::unique_ptr<vk::raii::DescriptorSetLayout> computeDescriptorSetLayout;
-    std::unique_ptr<vk::raii::PipelineLayout> computePipelineLayout;
-    std::unique_ptr<vk::raii::Pipeline> clearEdgesPipeline;
-    std::unique_ptr<vk::raii::Pipeline> buildGridPipeline;
-    std::unique_ptr<vk::raii::Pipeline> physicsPipeline;
-    std::unique_ptr<vk::raii::DescriptorPool> descriptorPool;
-    std::unique_ptr<vk::raii::DescriptorPool> imguiPool;
+    vk::raii::DescriptorSetLayout computeDescriptorSetLayout = nullptr;
+    vk::raii::PipelineLayout computePipelineLayout = nullptr;
+    vk::raii::Pipeline clearEdgesPipeline = nullptr;
+    vk::raii::Pipeline buildGridPipeline = nullptr;
+    vk::raii::Pipeline physicsPipeline = nullptr;
+    vk::raii::DescriptorPool descriptorPool = nullptr;
+    vk::raii::DescriptorPool imguiPool = nullptr;
     std::vector<vk::raii::DescriptorSet> computeDescriptorSets;
 
     std::uint32_t totalCars = 0;
@@ -151,19 +160,19 @@ private:
     const std::uint32_t WIDTH = 800;
     const std::uint32_t HEIGHT = 600;
 
-    std::unique_ptr<vk::raii::SurfaceKHR> surface;
-    std::unique_ptr<vk::raii::SwapchainKHR> swapchain;
+    vk::raii::SurfaceKHR surface = nullptr;
+    vk::raii::SwapchainKHR swapchain = nullptr;
     std::vector<vk::Image> swapchainImages;
     std::vector<vk::raii::ImageView> swapchainImageViews;
-    std::unique_ptr<vk::raii::RenderPass> renderPass;
+    vk::raii::RenderPass renderPass = nullptr;
     std::vector<vk::raii::Framebuffer> framebuffers;
     vk::Format swapchainImageFormat{};
     vk::Extent2D swapchainExtent;
 
-    std::unique_ptr<vk::raii::PipelineLayout> graphicsPipelineLayout;
-    std::unique_ptr<vk::raii::Pipeline> graphicsPipeline;
-    std::unique_ptr<vk::raii::Pipeline> streetPipeline;
-    std::unique_ptr<vk::raii::Pipeline> exitNodePipeline;
+    vk::raii::PipelineLayout graphicsPipelineLayout = nullptr;
+    vk::raii::Pipeline graphicsPipeline = nullptr;
+    vk::raii::Pipeline streetPipeline = nullptr;
+    vk::raii::Pipeline exitNodePipeline = nullptr;
     GraphicsConstants mapBounds;
 
     // --- SIMULATION CONTROLS ---
@@ -194,12 +203,12 @@ private:
     std::vector<GPU_Node> cpuNodes;
 
     // --- READBACK BUFFERS (Host Visible) ---
-    std::unique_ptr<vk::raii::Buffer> carReadbackBuffer;
-    std::unique_ptr<vk::raii::DeviceMemory> carReadbackMemory;
-    std::unique_ptr<vk::raii::Buffer> edgeReadbackBuffer;
-    std::unique_ptr<vk::raii::DeviceMemory> edgeReadbackMemory;
-    std::unique_ptr<vk::raii::Buffer> nodeReadbackBuffer;
-    std::unique_ptr<vk::raii::DeviceMemory> nodeReadbackMemory;
+    vk::raii::Buffer carReadbackBuffer = nullptr;
+    vk::raii::DeviceMemory carReadbackMemory = nullptr;
+    vk::raii::Buffer edgeReadbackBuffer = nullptr;
+    vk::raii::DeviceMemory edgeReadbackMemory = nullptr;
+    vk::raii::Buffer nodeReadbackBuffer = nullptr;
+    vk::raii::DeviceMemory nodeReadbackMemory = nullptr;
 
     // --- UI STATE ---
     std::int32_t selectedCarId = 0;
@@ -281,7 +290,7 @@ private:
         // 2. Seed the algorithm with all CURRENTLY OPEN exits
         for (std::size_t i = 0; i < allExitNodes.size(); ++i) {
             if (isExitOpen[i]) {
-                std::int32_t exit_idx = allExitNodes[i];
+                const std::int32_t exit_idx = allExitNodes[i];
                 min_travel_time[exit_idx] = 0.f;
                 pq.emplace(0.f, exit_idx);
             }
@@ -289,10 +298,12 @@ private:
 
         // 3. Run Dijkstra backwards
         while (!pq.empty()) {
-            auto [current_time, current_node] = pq.top();
+            const auto [current_time, current_node] = pq.top();
             pq.pop();
 
-            if (current_time > min_travel_time[current_node]) continue;
+            if (current_time > min_travel_time[current_node]) {
+                continue;
+            }
 
             for (const auto &incoming: reverseGraph[current_node]) {
                 float travel_time = incoming.travel_time;
@@ -307,7 +318,7 @@ private:
                         travel_time = incoming.travel_time * (1.f + 4.f * std::pow(congestion, 4.f));
                     }
                 }
-                float new_time = current_time + travel_time;
+                const float new_time = current_time + travel_time;
 
                 if (new_time < min_travel_time[incoming.source_node]) {
                     min_travel_time[incoming.source_node] = new_time;
@@ -339,7 +350,7 @@ private:
 
     void triggerDynamicReroute() {
         // 1. Force the GPU to finish its current frame and pause
-        device->waitIdle();
+        device.waitIdle();
         const bool wasPaused = isPaused;
         isPaused = true;
 
@@ -349,26 +360,30 @@ private:
         // 3. Upload the newly updated cpuEdges and cpuNodes arrays to VRAM
         {
             const vk::DeviceSize bufferSize = sizeof(GPU_Edge) * totalEdges;
-            auto [stagingBuffer, stagingMemory] = createBuffer(
+            vk::raii::Buffer stagingBuffer = nullptr;
+            vk::raii::DeviceMemory stagingMemory = nullptr;
+            std::tie(stagingBuffer, stagingMemory) = createBuffer(
                 bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
             );
-            void *mappedData{stagingMemory->mapMemory(0, bufferSize)};
+            void *mappedData = stagingMemory.mapMemory(0, bufferSize);
             std::memcpy(mappedData, cpuEdges.data(), bufferSize);
-            stagingMemory->unmapMemory();
-            copyBuffer(*stagingBuffer, *edgeBuffer, bufferSize);
+            stagingMemory.unmapMemory();
+            copyBuffer(stagingBuffer, edgeBuffer, bufferSize);
         }
 
         {
             const vk::DeviceSize bufferSize = sizeof(GPU_Node) * cpuNodes.size();
-            auto [stagingBuffer, stagingMemory] = createBuffer(
+            vk::raii::Buffer stagingBuffer = nullptr;
+            vk::raii::DeviceMemory stagingMemory = nullptr;
+            std::tie(stagingBuffer, stagingMemory) = createBuffer(
                 bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
             );
-            void *mappedData{stagingMemory->mapMemory(0, bufferSize)};
+            void *mappedData = stagingMemory.mapMemory(0, bufferSize);
             std::memcpy(mappedData, cpuNodes.data(), bufferSize);
-            stagingMemory->unmapMemory();
-            copyBuffer(*stagingBuffer, *nodeBuffer, bufferSize);
+            stagingMemory.unmapMemory();
+            copyBuffer(stagingBuffer, nodeBuffer, bufferSize);
         }
 
         // 4. Resume the simulation
@@ -386,12 +401,12 @@ private:
             glfwWaitEvents();
         }
 
-        device->waitIdle(); // Ensure GPU isn't using old swapchain resources
+        device.waitIdle(); // Ensure GPU isn't using old swapchain resources
 
         // Destroy the old objects first
         framebuffers.clear();
         swapchainImageViews.clear();
-        swapchain.reset();
+        swapchain = nullptr;
 
         // Rebuild them with the new dimensions
         createSwapchain();
@@ -401,14 +416,14 @@ private:
         mapBounds.aspect_ratio = static_cast<float>(swapchainExtent.width) / static_cast<float>(swapchainExtent.height);
     }
 
-    static void framebufferResizeCallback(GLFWwindow *window, std::int32_t width, std::int32_t height) {
+    static void framebufferResizeCallback(GLFWwindow *window, const std::int32_t width, const std::int32_t height) {
         auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(window));
         engine->framebufferResized = true;
     }
 
     void initImGui() {
         // 1. Create a massive descriptor pool specifically for ImGui
-        std::array<vk::DescriptorPoolSize, 11> poolSizes = {
+        const std::array<vk::DescriptorPoolSize, 11> poolSizes = {
             {
                 {vk::DescriptorType::eSampler, 1000},
                 {vk::DescriptorType::eCombinedImageSampler, 1000},
@@ -424,12 +439,12 @@ private:
             }
         };
 
-        vk::DescriptorPoolCreateInfo poolInfo{
+        const vk::DescriptorPoolCreateInfo poolInfo{
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
             .maxSets = 1000, .poolSizeCount = static_cast<std::uint32_t>(poolSizes.size()),
             .pPoolSizes = poolSizes.data()
         };
-        imguiPool = std::make_unique<vk::raii::DescriptorPool>(*device, poolInfo);
+        imguiPool = vk::raii::DescriptorPool{device, poolInfo};
 
         // 2. Initialize the core ImGui context
         IMGUI_CHECKVERSION();
@@ -442,18 +457,18 @@ private:
         ImGui_ImplGlfw_InitForVulkan(window, true);
 
         ImGui_ImplVulkan_InitInfo init_info = {};
-        init_info.Instance = **instance;
-        init_info.PhysicalDevice = **physicalDevice;
-        init_info.Device = **device;
+        init_info.Instance = *instance;
+        init_info.PhysicalDevice = *physicalDevice;
+        init_info.Device = *device;
         init_info.QueueFamily = queueFamilyIndex;
-        init_info.Queue = **queue;
+        init_info.Queue = *queue;
         init_info.PipelineCache = VK_NULL_HANDLE;
-        init_info.DescriptorPool = **imguiPool;
+        init_info.DescriptorPool = *imguiPool;
         init_info.MinImageCount = 2;
         init_info.ImageCount = static_cast<std::uint32_t>(swapchainImages.size());
         init_info.Allocator = nullptr;
         init_info.CheckVkResultFn = nullptr;
-        init_info.PipelineInfoMain.RenderPass = **renderPass;
+        init_info.PipelineInfoMain.RenderPass = *renderPass;
         init_info.PipelineInfoMain.Subpass = 0;
         init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
@@ -472,7 +487,7 @@ private:
         glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 
         // A. SCROLL CALLBACK (ZOOM IN / OUT)
-        glfwSetScrollCallback(window, [](GLFWwindow *win, double xoffset, const double yoffset) {
+        glfwSetScrollCallback(window, [](GLFWwindow *win, const double xoffset, const double yoffset) {
             // --- THE FIX: Ignore scroll if hovering over the UI ---
             if (ImGui::GetIO().WantCaptureMouse) return;
 
@@ -487,7 +502,7 @@ private:
 
         // B. MOUSE BUTTON CALLBACK (START / STOP DRAG & PICKING)
         glfwSetMouseButtonCallback(
-            window, [](GLFWwindow *win, const std::int32_t button, const std::int32_t action, std::int32_t mods) {
+            window, [](GLFWwindow *win, const std::int32_t button, const std::int32_t action, const std::int32_t mods) {
                 if (ImGui::GetIO().WantCaptureMouse) return;
 
                 auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
@@ -543,10 +558,10 @@ private:
                 const double deltaX = xpos - engine->lastMouseX;
                 const double deltaY = ypos - engine->lastMouseY;
 
-                const float screenFactorX = (engine->mapBounds.extent_height / static_cast<float>(engine->
-                                                 swapchainExtent.height));
-                const float screenFactorY = (engine->mapBounds.extent_height / static_cast<float>(engine->
-                                                 swapchainExtent.height));
+                const float screenFactorX = engine->mapBounds.extent_height / static_cast<float>(engine->
+                                                swapchainExtent.height);
+                const float screenFactorY = engine->mapBounds.extent_height / static_cast<float>(engine->
+                                                swapchainExtent.height);
 
                 engine->mapBounds.camera_x -= static_cast<float>(deltaX) * (
                     screenFactorX / engine->mapBounds.zoom_level);
@@ -583,7 +598,7 @@ private:
 
     void initVulkan() {
         VULKAN_HPP_DEFAULT_DISPATCHER.init();
-        context = std::make_unique<vk::raii::Context>();
+        context = vk::raii::Context{};
 
         constexpr vk::ApplicationInfo appInfo{
             .pApplicationName = "Vienna Evacuation", .applicationVersion = 1,
@@ -601,13 +616,13 @@ private:
             .ppEnabledExtensionNames = glfwExtensions
         };
 
-        instance = std::make_unique<vk::raii::Instance>(*context, createInfo);
-        VULKAN_HPP_DEFAULT_DISPATCHER.init(**instance);
+        instance = vk::raii::Instance{context, createInfo};
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
 
-        const vk::raii::PhysicalDevices physicalDevices{*instance};
-        physicalDevice = std::make_unique<vk::raii::PhysicalDevice>(physicalDevices.front());
+        const vk::raii::PhysicalDevices physicalDevices{instance};
+        physicalDevice = physicalDevices.front();
 
-        const std::vector<vk::QueueFamilyProperties> queueFamilies{physicalDevice->getQueueFamilyProperties()};
+        const std::vector queueFamilies{physicalDevice.getQueueFamilyProperties()};
         for (std::uint32_t i = 0; i < queueFamilies.size(); ++i) {
             if ((queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics) &&
                 (queueFamilies[i].queueFlags & vk::QueueFlagBits::eCompute)) {
@@ -616,7 +631,7 @@ private:
             }
         }
 
-        constexpr float queuePriority{1.f};
+        constexpr float queuePriority = 1.f;
         const vk::DeviceQueueCreateInfo queueCreateInfo{
             .queueFamilyIndex = queueFamilyIndex, .queueCount = 1, .pQueuePriorities = &queuePriority
         };
@@ -628,8 +643,8 @@ private:
         activeDeviceExtensions.push_back("VK_KHR_shader_draw_parameters");
 
         vk::PhysicalDeviceFeatures deviceFeatures{};
-        deviceFeatures.vertexPipelineStoresAndAtomics = VK_TRUE;
-        deviceFeatures.fragmentStoresAndAtomics = VK_TRUE;
+        deviceFeatures.vertexPipelineStoresAndAtomics = true;
+        deviceFeatures.fragmentStoresAndAtomics = true;
 
         const vk::DeviceCreateInfo deviceCreateInfo{
             .queueCreateInfoCount = 1, .pQueueCreateInfos = &queueCreateInfo,
@@ -637,51 +652,51 @@ private:
             .ppEnabledExtensionNames = activeDeviceExtensions.data(), .pEnabledFeatures = &deviceFeatures
         };
 
-        device = std::make_unique<vk::raii::Device>(*physicalDevice, deviceCreateInfo);
-        VULKAN_HPP_DEFAULT_DISPATCHER.init(**device);
-        queue = std::make_unique<vk::raii::Queue>(*device, queueFamilyIndex, 0);
+        device = vk::raii::Device{physicalDevice, deviceCreateInfo};
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
+        queue = vk::raii::Queue{device, queueFamilyIndex, 0};
 
         const vk::CommandPoolCreateInfo poolInfo{
             .flags = vk::CommandPoolCreateFlagBits::eTransient | vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
             .queueFamilyIndex = queueFamilyIndex
         };
-        commandPool = std::make_unique<vk::raii::CommandPool>(*device, poolInfo);
+        commandPool = vk::raii::CommandPool{device, poolInfo};
     }
 
-    [[nodiscard]] auto findMemoryType(const std::uint32_t typeFilter,
-                                      const vk::MemoryPropertyFlags properties) const -> std::uint32_t {
-        const vk::PhysicalDeviceMemoryProperties memProperties{physicalDevice->getMemoryProperties()};
+    [[nodiscard]] std::uint32_t findMemoryType(const std::uint32_t typeFilter,
+                                               const vk::MemoryPropertyFlags properties) const {
+        const vk::PhysicalDeviceMemoryProperties memProperties{physicalDevice.getMemoryProperties()};
         for (std::uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
-            if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+            if (typeFilter & 1 << i && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
                 return i;
             }
         }
         throw std::runtime_error{"Failed to find suitable memory type!"};
     }
 
-    [[nodiscard]] auto createBuffer(const vk::DeviceSize size, const vk::BufferUsageFlags usage,
-                                    const vk::MemoryPropertyFlags properties) const -> std::pair<std::unique_ptr<
-        vk::raii::Buffer>, std::unique_ptr<vk::raii::DeviceMemory> > {
+    [[nodiscard]] std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(
+        const vk::DeviceSize size, const vk::BufferUsageFlags usage,
+        const vk::MemoryPropertyFlags properties) const {
         const vk::BufferCreateInfo bufferInfo{.size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive};
-        auto newBuffer{std::make_unique<vk::raii::Buffer>(*device, bufferInfo)};
+        vk::raii::Buffer newBuffer{device, bufferInfo};
 
-        const vk::MemoryRequirements memRequirements{newBuffer->getMemoryRequirements()};
+        const vk::MemoryRequirements memRequirements{newBuffer.getMemoryRequirements()};
         const vk::MemoryAllocateInfo allocInfo{
             .allocationSize = memRequirements.size,
             .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)
         };
-        auto newMemory{std::make_unique<vk::raii::DeviceMemory>(*device, allocInfo)};
+        vk::raii::DeviceMemory newMemory{device, allocInfo};
 
-        newBuffer->bindMemory(**newMemory, 0);
+        newBuffer.bindMemory(*newMemory, 0);
         return {std::move(newBuffer), std::move(newMemory)};
     }
 
     void copyBuffer(const vk::raii::Buffer &srcBuffer, const vk::raii::Buffer &dstBuffer,
                     const vk::DeviceSize size) const {
         const vk::CommandBufferAllocateInfo allocInfo{
-            .commandPool = **commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
+            .commandPool = *commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
         };
-        const vk::raii::CommandBuffers commandBuffers{*device, allocInfo};
+        const vk::raii::CommandBuffers commandBuffers{device, allocInfo};
         const vk::raii::CommandBuffer &cmdBuffer{commandBuffers.front()};
 
         constexpr vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
@@ -691,25 +706,29 @@ private:
         cmdBuffer.end();
 
         const vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &(*cmdBuffer)};
-        queue->submit(submitInfo, nullptr);
-        queue->waitIdle();
+        queue.submit(submitInfo, nullptr);
+        queue.waitIdle();
     }
 
     template<typename T>
-    void uploadVectorToGPU(std::span<const T> data, std::unique_ptr<vk::raii::Buffer> &outBuffer,
-                           std::unique_ptr<vk::raii::DeviceMemory> &outMemory) {
+    void uploadVectorToGPU(std::span<const T> data, vk::raii::Buffer &outBuffer,
+                           vk::raii::DeviceMemory &outMemory) {
         const vk::DeviceSize bufferSize = sizeof(T) * data.size();
 
-        auto [stagingBuffer, stagingMemory] = createBuffer(
+        vk::raii::Buffer stagingBuffer = nullptr;
+        vk::raii::DeviceMemory stagingMemory = nullptr;
+        std::tie(stagingBuffer, stagingMemory) = createBuffer(
             bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
         );
 
-        void *mappedData{stagingMemory->mapMemory(0, bufferSize)};
+        void *mappedData = stagingMemory.mapMemory(0, bufferSize);
         std::memcpy(mappedData, data.data(), static_cast<std::size_t>(bufferSize));
-        stagingMemory->unmapMemory();
+        stagingMemory.unmapMemory();
 
-        auto [deviceLocalBuffer, deviceLocalMemory] = createBuffer(
+        vk::raii::Buffer deviceLocalBuffer = nullptr;
+        vk::raii::DeviceMemory deviceLocalMemory = nullptr;
+        std::tie(deviceLocalBuffer, deviceLocalMemory) = createBuffer(
             bufferSize,
             vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer |
             vk::BufferUsageFlagBits::eTransferSrc,
@@ -718,11 +737,11 @@ private:
 
         outBuffer = std::move(deviceLocalBuffer);
         outMemory = std::move(deviceLocalMemory);
-        copyBuffer(*stagingBuffer, *outBuffer, bufferSize);
+        copyBuffer(stagingBuffer, outBuffer, bufferSize);
     }
 
     void applyParticipation() {
-        device->waitIdle();
+        device.waitIdle();
 
         auto rawCars = loadBinaryData<GPU_Car>(vulkanCarsPath);
         std::vector cars_spawned_per_edge(cpuEdges.size(), 0);
@@ -797,8 +816,8 @@ private:
         const float width_meters = temp_max_x - temp_min_x;
         const float height_meters = temp_max_y - temp_min_y;
 
-        mapBounds.camera_x = temp_min_x + (width_meters * 0.5f);
-        mapBounds.camera_y = temp_min_y + (height_meters * 0.5f);
+        mapBounds.camera_x = temp_min_x + width_meters * 0.5f;
+        mapBounds.camera_y = temp_min_y + height_meters * 0.5f;
         mapBounds.zoom_level = 1.f;
         mapBounds.extent_width = width_meters;
         mapBounds.extent_height = height_meters;
@@ -810,13 +829,11 @@ private:
         cpuNodes = nodes;
 
         // Create Readback Buffers (Host Visible + Coherent so the CPU can read them)
-        auto createReadback = [&](const vk::DeviceSize size, std::unique_ptr<vk::raii::Buffer> &buf,
-                                  std::unique_ptr<vk::raii::DeviceMemory> &mem) {
-            auto [b, m] = createBuffer(size, vk::BufferUsageFlagBits::eTransferDst,
-                                       vk::MemoryPropertyFlagBits::eHostVisible |
-                                       vk::MemoryPropertyFlagBits::eHostCoherent);
-            buf = std::move(b);
-            mem = std::move(m);
+        auto createReadback = [&](const vk::DeviceSize size, vk::raii::Buffer &buf,
+                                  vk::raii::DeviceMemory &mem) {
+            std::tie(buf, mem) = createBuffer(size, vk::BufferUsageFlagBits::eTransferDst,
+                                              vk::MemoryPropertyFlagBits::eHostVisible |
+                                              vk::MemoryPropertyFlagBits::eHostCoherent);
         };
 
         createReadback(sizeof(GPU_Car) * totalCars, carReadbackBuffer, carReadbackMemory);
@@ -853,7 +870,7 @@ private:
         exitLastEvacuatedCount.assign(allExitNodes.size(), 0);
 
         // Apply config closed exits (supports both exit index 0-124 and global node index)
-        for (std::int32_t entry: configClosedExits) {
+        for (const std::int32_t entry: configClosedExits) {
             if (entry >= 0 && entry < static_cast<std::int32_t>(allExitNodes.size())) {
                 isExitOpen[entry] = false;
             }
@@ -876,19 +893,19 @@ private:
         const vk::ShaderModuleCreateInfo clearEdgesInfo{
             .codeSize = clearEdgesCode.size() * 4, .pCode = clearEdgesCode.data()
         };
-        const vk::raii::ShaderModule clearEdgesShader{*device, clearEdgesInfo};
+        const vk::raii::ShaderModule clearEdgesShader{device, clearEdgesInfo};
 
         const auto buildGridCode = loadBinaryData<std::uint32_t>("build_grid.spv");
         const vk::ShaderModuleCreateInfo buildGridInfo{
             .codeSize = buildGridCode.size() * 4, .pCode = buildGridCode.data()
         };
-        const vk::raii::ShaderModule buildGridShader{*device, buildGridInfo};
+        const vk::raii::ShaderModule buildGridShader{device, buildGridInfo};
 
         const auto physicsCode = loadBinaryData<std::uint32_t>("physics.spv");
         const vk::ShaderModuleCreateInfo physShaderInfo{
             .codeSize = physicsCode.size() * 4, .pCode = physicsCode.data()
         };
-        const vk::raii::ShaderModule physShader{*device, physShaderInfo};
+        const vk::raii::ShaderModule physShader{device, physShaderInfo};
 
         constexpr std::array<vk::DescriptorSetLayoutBinding, 3> bindings = {
             {
@@ -910,60 +927,60 @@ private:
         const vk::DescriptorSetLayoutCreateInfo layoutInfo{
             .bindingCount = static_cast<std::uint32_t>(bindings.size()), .pBindings = bindings.data()
         };
-        computeDescriptorSetLayout = std::make_unique<vk::raii::DescriptorSetLayout>(*device, layoutInfo);
+        computeDescriptorSetLayout = vk::raii::DescriptorSetLayout{device, layoutInfo};
 
         constexpr vk::PushConstantRange pushConstantRange{
             .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(PushConstants)
         };
 
         const vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
-            .setLayoutCount = 1, .pSetLayouts = &(**computeDescriptorSetLayout), .pushConstantRangeCount = 1,
+            .setLayoutCount = 1, .pSetLayouts = &(*computeDescriptorSetLayout), .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange
         };
-        computePipelineLayout = std::make_unique<vk::raii::PipelineLayout>(*device, pipelineLayoutInfo);
+        computePipelineLayout = vk::raii::PipelineLayout{device, pipelineLayoutInfo};
 
-        auto mainEntryPoint = "main";
+        const auto mainEntryPoint = "main";
 
         const vk::ComputePipelineCreateInfo cePipelineInfo{
             .flags = {},
             .stage = {.stage = vk::ShaderStageFlagBits::eCompute, .module = *clearEdgesShader, .pName = mainEntryPoint},
-            .layout = **computePipelineLayout
+            .layout = *computePipelineLayout
         };
-        clearEdgesPipeline = std::make_unique<vk::raii::Pipeline>(*device, nullptr, cePipelineInfo);
+        clearEdgesPipeline = vk::raii::Pipeline{device, nullptr, cePipelineInfo};
 
         const vk::ComputePipelineCreateInfo bgPipelineInfo{
             .flags = {},
             .stage = {.stage = vk::ShaderStageFlagBits::eCompute, .module = *buildGridShader, .pName = mainEntryPoint},
-            .layout = **computePipelineLayout
+            .layout = *computePipelineLayout
         };
-        buildGridPipeline = std::make_unique<vk::raii::Pipeline>(*device, nullptr, bgPipelineInfo);
+        buildGridPipeline = vk::raii::Pipeline{device, nullptr, bgPipelineInfo};
 
         const vk::ComputePipelineCreateInfo physPipelineInfo{
             .flags = {},
             .stage = {.stage = vk::ShaderStageFlagBits::eCompute, .module = *physShader, .pName = mainEntryPoint},
-            .layout = **computePipelineLayout
+            .layout = *computePipelineLayout
         };
-        physicsPipeline = std::make_unique<vk::raii::Pipeline>(*device, nullptr, physPipelineInfo);
+        physicsPipeline = vk::raii::Pipeline{device, nullptr, physPipelineInfo};
 
         constexpr vk::DescriptorPoolSize poolSize{.type = vk::DescriptorType::eStorageBuffer, .descriptorCount = 3};
         const vk::DescriptorPoolCreateInfo poolInfo{
             .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, .maxSets = 1, .poolSizeCount = 1,
             .pPoolSizes = &poolSize
         };
-        descriptorPool = std::make_unique<vk::raii::DescriptorPool>(*device, poolInfo);
+        descriptorPool = vk::raii::DescriptorPool{device, poolInfo};
 
         const vk::DescriptorSetAllocateInfo allocInfo{
-            .descriptorPool = **descriptorPool, .descriptorSetCount = 1, .pSetLayouts = &(**computeDescriptorSetLayout)
+            .descriptorPool = *descriptorPool, .descriptorSetCount = 1, .pSetLayouts = &(*computeDescriptorSetLayout)
         };
-        computeDescriptorSets = vk::raii::DescriptorSets{*device, allocInfo};
+        computeDescriptorSets = vk::raii::DescriptorSets{device, allocInfo};
 
         updateDescriptorSets();
     }
 
     void updateDescriptorSets() const {
-        const vk::DescriptorBufferInfo nodeBufferInfo{.buffer = **nodeBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
-        const vk::DescriptorBufferInfo edgeBufferInfo{.buffer = **edgeBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
-        const vk::DescriptorBufferInfo carBufferInfo{.buffer = **carBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
+        const vk::DescriptorBufferInfo nodeBufferInfo{.buffer = *nodeBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
+        const vk::DescriptorBufferInfo edgeBufferInfo{.buffer = *edgeBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
+        const vk::DescriptorBufferInfo carBufferInfo{.buffer = *carBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
 
         const std::array<vk::WriteDescriptorSet, 3> descriptorWrites = {
             {
@@ -981,19 +998,19 @@ private:
                 }
             }
         };
-        device->updateDescriptorSets(descriptorWrites, nullptr);
+        device.updateDescriptorSets(descriptorWrites, nullptr);
     }
 
     void createSwapchain() {
-        if (!surface) {
+        if (!*surface) {
             VkSurfaceKHR c_surface;
-            if (glfwCreateWindowSurface(**instance, window, nullptr, &c_surface) != VK_SUCCESS)
+            if (glfwCreateWindowSurface(*instance, window, nullptr, &c_surface) != VK_SUCCESS)
                 throw std::runtime_error{"Failed to create window surface!"};
-            surface = std::make_unique<vk::raii::SurfaceKHR>(*instance, c_surface);
+            surface = vk::raii::SurfaceKHR{instance, c_surface};
         }
 
-        const vk::SurfaceCapabilitiesKHR capabilities{physicalDevice->getSurfaceCapabilitiesKHR(**surface)};
-        const std::vector<vk::SurfaceFormatKHR> formats{physicalDevice->getSurfaceFormatsKHR(**surface)};
+        const vk::SurfaceCapabilitiesKHR capabilities{physicalDevice.getSurfaceCapabilitiesKHR(*surface)};
+        const std::vector formats{physicalDevice.getSurfaceFormatsKHR(*surface)};
 
         vk::SurfaceFormatKHR surfaceFormat = formats[0];
         for (const auto &availableFormat: formats) {
@@ -1021,15 +1038,15 @@ private:
             imageCount = capabilities.maxImageCount;
 
         const vk::SwapchainCreateInfoKHR createInfo{
-            .flags = {}, .surface = **surface, .minImageCount = imageCount, .imageFormat = surfaceFormat.format,
+            .flags = {}, .surface = *surface, .minImageCount = imageCount, .imageFormat = surfaceFormat.format,
             .imageColorSpace = surfaceFormat.colorSpace, .imageExtent = swapchainExtent, .imageArrayLayers = 1,
             .imageUsage = vk::ImageUsageFlagBits::eColorAttachment, .imageSharingMode = vk::SharingMode::eExclusive,
             .preTransform = capabilities.currentTransform, .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
-            .presentMode = vk::PresentModeKHR::eFifo, .clipped = VK_TRUE
+            .presentMode = vk::PresentModeKHR::eFifo, .clipped = true
         };
 
-        swapchain = std::make_unique<vk::raii::SwapchainKHR>(*device, createInfo);
-        swapchainImages = swapchain->getImages();
+        swapchain = vk::raii::SwapchainKHR{device, createInfo};
+        swapchainImages = swapchain.getImages();
 
         for (const auto &image: swapchainImages) {
             constexpr vk::ComponentMapping components{
@@ -1044,7 +1061,7 @@ private:
                 .flags = {}, .image = image, .viewType = vk::ImageViewType::e2D, .format = swapchainImageFormat,
                 .components = components, .subresourceRange = subresourceRange
             };
-            swapchainImageViews.emplace_back(*device, viewInfo);
+            swapchainImageViews.emplace_back(device, viewInfo);
         }
 
         // Update aspect ratio for rendering
@@ -1070,17 +1087,17 @@ private:
             .pSubpasses = &subpass
         };
 
-        renderPass = std::make_unique<vk::raii::RenderPass>(*device, renderPassInfo);
+        renderPass = vk::raii::RenderPass{device, renderPassInfo};
     }
 
     void createFramebuffers() {
         for (const auto &imageView: swapchainImageViews) {
-            const std::array<vk::ImageView, 1> attachments = {*imageView};
+            const std::array attachments = {*imageView};
             const vk::FramebufferCreateInfo framebufferInfo{
-                .flags = {}, .renderPass = **renderPass, .attachmentCount = 1, .pAttachments = attachments.data(),
+                .flags = {}, .renderPass = *renderPass, .attachmentCount = 1, .pAttachments = attachments.data(),
                 .width = swapchainExtent.width, .height = swapchainExtent.height, .layers = 1
             };
-            framebuffers.emplace_back(*device, framebufferInfo);
+            framebuffers.emplace_back(device, framebufferInfo);
         }
     }
 
@@ -1089,13 +1106,13 @@ private:
         const auto fragCode = loadBinaryData<std::uint32_t>("graphics_frag.spv");
 
         const vk::raii::ShaderModule vertModule{
-            *device, vk::ShaderModuleCreateInfo{.codeSize = vertCode.size() * 4, .pCode = vertCode.data()}
+            device, vk::ShaderModuleCreateInfo{.codeSize = vertCode.size() * 4, .pCode = vertCode.data()}
         };
         const vk::raii::ShaderModule fragModule{
-            *device, vk::ShaderModuleCreateInfo{.codeSize = fragCode.size() * 4, .pCode = fragCode.data()}
+            device, vk::ShaderModuleCreateInfo{.codeSize = fragCode.size() * 4, .pCode = fragCode.data()}
         };
 
-        const std::array<vk::PipelineShaderStageCreateInfo, 2> shaderStages = {
+        const std::array shaderStages = {
             vk::PipelineShaderStageCreateInfo{
                 .flags = {}, .stage = vk::ShaderStageFlagBits::eVertex, .module = *vertModule, .pName = "main"
             },
@@ -1128,7 +1145,7 @@ private:
             .rasterizationSamples = vk::SampleCountFlagBits::e1
         };
         constexpr vk::PipelineColorBlendAttachmentState colorBlendAttachment{
-            .blendEnable = VK_FALSE,
+            .blendEnable = false,
             .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                               vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
         };
@@ -1136,40 +1153,40 @@ private:
             .attachmentCount = 1, .pAttachments = &colorBlendAttachment
         };
         constexpr vk::PipelineDepthStencilStateCreateInfo depthStencil{
-            .depthTestEnable = VK_FALSE, .depthWriteEnable = VK_FALSE, .depthCompareOp = vk::CompareOp::eLessOrEqual,
-            .stencilTestEnable = VK_FALSE
+            .depthTestEnable = false, .depthWriteEnable = false, .depthCompareOp = vk::CompareOp::eLessOrEqual,
+            .stencilTestEnable = false
         };
 
         constexpr vk::PushConstantRange pushRange{
             .stageFlags = vk::ShaderStageFlagBits::eAllGraphics, .offset = 0, .size = sizeof(GraphicsConstants)
         };
         const vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
-            .setLayoutCount = 1, .pSetLayouts = &(**computeDescriptorSetLayout), .pushConstantRangeCount = 1,
+            .setLayoutCount = 1, .pSetLayouts = &*computeDescriptorSetLayout, .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushRange
         };
-        graphicsPipelineLayout = std::make_unique<vk::raii::PipelineLayout>(*device, pipelineLayoutInfo);
+        graphicsPipelineLayout = vk::raii::PipelineLayout{device, pipelineLayoutInfo};
 
         const vk::GraphicsPipelineCreateInfo pipelineInfo{
             .flags = {}, .stageCount = 2, .pStages = shaderStages.data(), .pVertexInputState = &vertexInputInfo,
             .pInputAssemblyState = &inputAssembly, .pViewportState = &viewportState, .pRasterizationState = &rasterizer,
             .pMultisampleState = &multisampling, .pDepthStencilState = &depthStencil,
             .pColorBlendState = &colorBlending,
-            .pDynamicState = &dynamicStateInfo, .layout = **graphicsPipelineLayout, .renderPass = **renderPass,
+            .pDynamicState = &dynamicStateInfo, .layout = *graphicsPipelineLayout, .renderPass = *renderPass,
             .subpass = 0
         };
-        graphicsPipeline = std::make_unique<vk::raii::Pipeline>(*device, nullptr, pipelineInfo);
+        graphicsPipeline = vk::raii::Pipeline{device, nullptr, pipelineInfo};
 
         // --- STREET PIPELINE ---
         const auto streetVertCode = loadBinaryData<std::uint32_t>("streets_vert.spv");
         const auto streetFragCode = loadBinaryData<std::uint32_t>("streets_frag.spv");
         const vk::raii::ShaderModule streetVertModule{
-            *device, vk::ShaderModuleCreateInfo{.codeSize = streetVertCode.size() * 4, .pCode = streetVertCode.data()}
+            device, vk::ShaderModuleCreateInfo{.codeSize = streetVertCode.size() * 4, .pCode = streetVertCode.data()}
         };
         const vk::raii::ShaderModule streetFragModule{
-            *device, vk::ShaderModuleCreateInfo{.codeSize = streetFragCode.size() * 4, .pCode = streetFragCode.data()}
+            device, vk::ShaderModuleCreateInfo{.codeSize = streetFragCode.size() * 4, .pCode = streetFragCode.data()}
         };
 
-        const std::array<vk::PipelineShaderStageCreateInfo, 2> streetShaderStages = {
+        const std::array streetShaderStages = {
             vk::PipelineShaderStageCreateInfo{
                 .flags = {}, .stage = vk::ShaderStageFlagBits::eVertex, .module = *streetVertModule, .pName = "main"
             },
@@ -1184,21 +1201,21 @@ private:
         streetPipelineInfo.pStages = streetShaderStages.data();
         streetPipelineInfo.pInputAssemblyState = &lineAssembly;
 
-        streetPipeline = std::make_unique<vk::raii::Pipeline>(*device, nullptr, streetPipelineInfo);
+        streetPipeline = vk::raii::Pipeline{device, nullptr, streetPipelineInfo};
 
         // --- EXIT NODE PIPELINE ---
         const auto exitNodeVertCode = loadBinaryData<std::uint32_t>("exit_nodes_vert.spv");
         const auto exitNodeFragCode = loadBinaryData<std::uint32_t>("exit_nodes_frag.spv");
         const vk::raii::ShaderModule exitNodeVertModule{
-            *device,
+            device,
             vk::ShaderModuleCreateInfo{.codeSize = exitNodeVertCode.size() * 4, .pCode = exitNodeVertCode.data()}
         };
         const vk::raii::ShaderModule exitNodeFragModule{
-            *device,
+            device,
             vk::ShaderModuleCreateInfo{.codeSize = exitNodeFragCode.size() * 4, .pCode = exitNodeFragCode.data()}
         };
 
-        const std::array<vk::PipelineShaderStageCreateInfo, 2> exitNodeShaderStages = {
+        const std::array exitNodeShaderStages = {
             vk::PipelineShaderStageCreateInfo{
                 .flags = {}, .stage = vk::ShaderStageFlagBits::eVertex, .module = *exitNodeVertModule, .pName = "main"
             },
@@ -1210,25 +1227,25 @@ private:
         vk::GraphicsPipelineCreateInfo exitNodePipelineInfo = pipelineInfo;
         exitNodePipelineInfo.pStages = exitNodeShaderStages.data();
 
-        exitNodePipeline = std::make_unique<vk::raii::Pipeline>(*device, nullptr, exitNodePipelineInfo);
+        exitNodePipeline = vk::raii::Pipeline{device, nullptr, exitNodePipelineInfo};
     }
 
     void mainLoop() {
         const vk::CommandBufferAllocateInfo cmdAllocInfo{
-            .commandPool = **commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
+            .commandPool = *commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
         };
-        const vk::raii::CommandBuffers cmdBuffers{*device, cmdAllocInfo};
+        const vk::raii::CommandBuffers cmdBuffers{device, cmdAllocInfo};
         const vk::raii::CommandBuffer &cmd{cmdBuffers.front()};
 
-        const vk::raii::Semaphore imageAvailableSemaphore{*device, vk::SemaphoreCreateInfo{}};
-        const vk::raii::Semaphore renderFinishedSemaphore{*device, vk::SemaphoreCreateInfo{}};
+        const vk::raii::Semaphore imageAvailableSemaphore{device, vk::SemaphoreCreateInfo{}};
+        const vk::raii::Semaphore renderFinishedSemaphore{device, vk::SemaphoreCreateInfo{}};
         constexpr vk::ClearValue clearColor{
             .color = vk::ClearColorValue{std::array<float, 4>{0.05f, 0.05f, 0.1f, 1.f}}
         };
 
         auto lastFrameTime = std::chrono::high_resolution_clock::now();
         double accumulatedSimTimeQueue = 0.;
-        double lastSnapshotSimTime = simTime;
+        float lastSnapshotSimTime = simTime;
 
         takeSnapshot();
 
@@ -1259,14 +1276,16 @@ private:
 
                 {
                     const vk::DeviceSize bufferSize = sizeof(GPU_Edge) * totalEdges;
-                    auto [stagingBuffer, stagingMemory] = createBuffer(
+                    vk::raii::Buffer stagingBuffer = nullptr;
+                    vk::raii::DeviceMemory stagingMemory = nullptr;
+                    std::tie(stagingBuffer, stagingMemory) = createBuffer(
                         bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
                         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
                     );
-                    void *mappedData{stagingMemory->mapMemory(0, bufferSize)};
+                    void *mappedData = stagingMemory.mapMemory(0, bufferSize);
                     std::memcpy(mappedData, cpuEdges.data(), bufferSize);
-                    stagingMemory->unmapMemory();
-                    copyBuffer(*stagingBuffer, *edgeBuffer, bufferSize);
+                    stagingMemory.unmapMemory();
+                    copyBuffer(stagingBuffer, edgeBuffer, bufferSize);
                 }
 
                 recordPeriodicHistory();
@@ -1287,24 +1306,24 @@ private:
                 && !cpuCars.empty()) {
                 {
                     const vk::DeviceSize offset = sizeof(GPU_Car) * selectedCarId;
-                    const void *mappedData = carReadbackMemory->mapMemory(offset, sizeof(GPU_Car));
+                    const void *mappedData = carReadbackMemory.mapMemory(offset, sizeof(GPU_Car));
                     std::memcpy(&cpuCars[selectedCarId], mappedData, sizeof(GPU_Car));
-                    carReadbackMemory->unmapMemory();
+                    carReadbackMemory.unmapMemory();
                 }
 
                 const std::int32_t edgeIdx = cpuCars[selectedCarId].current_edge_idx;
                 if (edgeIdx >= 0 && edgeIdx < static_cast<std::int32_t>(totalEdges)) {
                     const vk::DeviceSize offset = sizeof(GPU_Edge) * edgeIdx;
-                    const void *mappedData = edgeReadbackMemory->mapMemory(offset, sizeof(GPU_Edge));
+                    const void *mappedData = edgeReadbackMemory.mapMemory(offset, sizeof(GPU_Edge));
                     std::memcpy(&cpuEdges[edgeIdx], mappedData, sizeof(GPU_Edge));
-                    edgeReadbackMemory->unmapMemory();
+                    edgeReadbackMemory.unmapMemory();
 
                     const std::int32_t nodeIdx = cpuEdges[edgeIdx].end_node_idx;
                     if (nodeIdx >= 0 && nodeIdx < static_cast<std::int32_t>(cpuNodes.size())) {
                         const vk::DeviceSize nodeOffset = sizeof(GPU_Node) * nodeIdx;
-                        const void *mappedNodeData = nodeReadbackMemory->mapMemory(nodeOffset, sizeof(GPU_Node));
+                        const void *mappedNodeData = nodeReadbackMemory.mapMemory(nodeOffset, sizeof(GPU_Node));
                         std::memcpy(&cpuNodes[nodeIdx], mappedNodeData, sizeof(GPU_Node));
-                        nodeReadbackMemory->unmapMemory();
+                        nodeReadbackMemory.unmapMemory();
                     }
                 }
             }
@@ -1319,7 +1338,7 @@ private:
             std::uint32_t imageIndex = 0;
             if (!isHeadless) {
                 try {
-                    auto [result, index] = swapchain->acquireNextImage(UINT64_MAX, *imageAvailableSemaphore, nullptr);
+                    auto [result, index] = swapchain.acquireNextImage(UINT64_MAX, *imageAvailableSemaphore, nullptr);
                     if (result == vk::Result::eSuboptimalKHR) {
                         framebufferResized = true;
                     }
@@ -1470,23 +1489,23 @@ private:
                 ImGui::End();
 
                 if (isSelecting) {
-                    ImDrawList *drawList = ImGui::GetForegroundDrawList();
-                    ImVec2 p_min(
+                    ImDrawList *const drawList = ImGui::GetForegroundDrawList();
+                    const ImVec2 p_min{
                         static_cast<float>(std::min(startMouseX, currentMouseX)),
                         static_cast<float>(std::min(startMouseY, currentMouseY))
-                    );
-                    ImVec2 p_max(
+                    };
+                    const ImVec2 p_max{
                         static_cast<float>(std::max(startMouseX, currentMouseX)),
                         static_cast<float>(std::max(startMouseY, currentMouseY))
-                    );
+                    };
                     drawList->AddRectFilled(p_min, p_max, IM_COL32(0, 150, 255, 60), 0.f);
                     drawList->AddRect(p_min, p_max, IM_COL32(0, 150, 255, 255), 0.f, 0, 2.f);
                 }
 
                 if (isInspecting) {
-                    ImDrawList *drawList = ImGui::GetForegroundDrawList();
-                    ImVec2 center(static_cast<float>(inspectMouseX), static_cast<float>(inspectMouseY));
-                    float r = worldDistanceToPixels(20.f / 111300.f);
+                    ImDrawList *const drawList = ImGui::GetForegroundDrawList();
+                    const ImVec2 center{static_cast<float>(inspectMouseX), static_cast<float>(inspectMouseY)};
+                    const float r = worldDistanceToPixels(20.f / 111300.f);
                     drawList->AddCircleFilled(center, r, IM_COL32(255, 165, 0, 40), 64);
                     drawList->AddCircle(center, r, IM_COL32(255, 165, 0, 180), 64, 2.f);
                 }
@@ -1520,41 +1539,41 @@ private:
 
             if (stepsToRun > 0) {
                 simTime += static_cast<float>(stepsToRun) * 0.1f;
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, **computePipelineLayout, 0,
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *computePipelineLayout, 0,
                                        {*computeDescriptorSets[0]}, nullptr);
                 const PushConstants pushData{.dt = 0.1f, .num_cars = totalCars, .num_edges = totalEdges};
-                cmd.pushConstants<PushConstants>(**computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
+                cmd.pushConstants<PushConstants>(*computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
                                                  pushData);
 
                 for (std::int32_t step = 0; step < stepsToRun; ++step) {
-                    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, **clearEdgesPipeline);
+                    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *clearEdgesPipeline);
                     cmd.dispatch((totalEdges + 255) / 256, 1, 1);
 
                     const vk::BufferMemoryBarrier edgeBarrier{
                         .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
                         .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                        .buffer = **edgeBuffer, .offset = 0, .size = VK_WHOLE_SIZE
+                        .buffer = *edgeBuffer, .offset = 0, .size = VK_WHOLE_SIZE
                     };
                     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
                                         vk::PipelineStageFlagBits::eComputeShader, {}, nullptr, edgeBarrier, nullptr);
 
-                    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, **buildGridPipeline);
+                    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *buildGridPipeline);
                     cmd.dispatch((totalCars + 255) / 256, 1, 1);
 
                     const vk::BufferMemoryBarrier carBarrier{
                         .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
                         .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                        .buffer = **carBuffer, .offset = 0, .size = VK_WHOLE_SIZE
+                        .buffer = *carBuffer, .offset = 0, .size = VK_WHOLE_SIZE
                     };
                     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
                                         vk::PipelineStageFlagBits::eComputeShader, {}, nullptr, carBarrier, nullptr);
 
-                    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, **physicsPipeline);
+                    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *physicsPipeline);
                     cmd.dispatch((totalCars + 255) / 256, 1, 1);
 
-                    vk::PipelineStageFlags dstStage = isHeadless || step < stepsToRun - 1
-                                                          ? vk::PipelineStageFlagBits::eComputeShader
-                                                          : vk::PipelineStageFlagBits::eVertexShader;
+                    const vk::PipelineStageFlags dstStage = isHeadless || step < stepsToRun - 1
+                                                                ? vk::PipelineStageFlagBits::eComputeShader
+                                                                : vk::PipelineStageFlagBits::eVertexShader;
                     constexpr vk::MemoryBarrier stepBarrier{
                         .srcAccessMask = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead,
                         .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite
@@ -1564,35 +1583,34 @@ private:
                 }
 
                 if (!isHeadless) {
-                    std::int32_t inspectEdgeIdx = -1;
-                    std::int32_t inspectNodeIdx = -1;
-                    if (selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>(totalCars) && !cpuCars.
-                        empty()) {
-                        inspectEdgeIdx = cpuCars[selectedCarId].current_edge_idx;
-                        if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<std::int32_t>(totalEdges)) {
-                            inspectNodeIdx = cpuEdges[inspectEdgeIdx].end_node_idx;
-                        }
-                    }
+                    const std::int32_t inspectEdgeIdx = (selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>
+                                                         (totalCars) && !cpuCars.empty())
+                                                            ? cpuCars[selectedCarId].current_edge_idx
+                                                            : -1;
+                    const std::int32_t inspectNodeIdx = (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<
+                                                             std::int32_t>(totalEdges))
+                                                            ? cpuEdges[inspectEdgeIdx].end_node_idx
+                                                            : -1;
 
                     std::vector<vk::BufferMemoryBarrier> barriers;
                     if (selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>(totalCars)) {
                         barriers.push_back(vk::BufferMemoryBarrier{
                             .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
-                            .dstAccessMask = vk::AccessFlagBits::eTransferRead, .buffer = **carBuffer,
+                            .dstAccessMask = vk::AccessFlagBits::eTransferRead, .buffer = *carBuffer,
                             .offset = sizeof(GPU_Car) * selectedCarId, .size = sizeof(GPU_Car)
                         });
                     }
                     if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<std::int32_t>(totalEdges)) {
                         barriers.push_back(vk::BufferMemoryBarrier{
                             .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
-                            .dstAccessMask = vk::AccessFlagBits::eTransferRead, .buffer = **edgeBuffer,
+                            .dstAccessMask = vk::AccessFlagBits::eTransferRead, .buffer = *edgeBuffer,
                             .offset = sizeof(GPU_Edge) * inspectEdgeIdx, .size = sizeof(GPU_Edge)
                         });
                     }
                     if (inspectNodeIdx >= 0 && inspectNodeIdx < static_cast<std::int32_t>(cpuNodes.size())) {
                         barriers.push_back(vk::BufferMemoryBarrier{
                             .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
-                            .dstAccessMask = vk::AccessFlagBits::eTransferRead, .buffer = **nodeBuffer,
+                            .dstAccessMask = vk::AccessFlagBits::eTransferRead, .buffer = *nodeBuffer,
                             .offset = sizeof(GPU_Node) * inspectNodeIdx, .size = sizeof(GPU_Node)
                         });
                     }
@@ -1603,19 +1621,19 @@ private:
                     }
 
                     if (selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>(totalCars)) {
-                        cmd.copyBuffer(**carBuffer, **carReadbackBuffer, vk::BufferCopy{
+                        cmd.copyBuffer(*carBuffer, *carReadbackBuffer, vk::BufferCopy{
                                            .srcOffset = sizeof(GPU_Car) * selectedCarId,
                                            .dstOffset = sizeof(GPU_Car) * selectedCarId, .size = sizeof(GPU_Car)
                                        });
                     }
                     if (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<std::int32_t>(totalEdges)) {
-                        cmd.copyBuffer(**edgeBuffer, **edgeReadbackBuffer, vk::BufferCopy{
+                        cmd.copyBuffer(*edgeBuffer, *edgeReadbackBuffer, vk::BufferCopy{
                                            .srcOffset = sizeof(GPU_Edge) * inspectEdgeIdx,
                                            .dstOffset = sizeof(GPU_Edge) * inspectEdgeIdx, .size = sizeof(GPU_Edge)
                                        });
                     }
                     if (inspectNodeIdx >= 0 && inspectNodeIdx < static_cast<std::int32_t>(cpuNodes.size())) {
-                        cmd.copyBuffer(**nodeBuffer, **nodeReadbackBuffer, vk::BufferCopy{
+                        cmd.copyBuffer(*nodeBuffer, *nodeReadbackBuffer, vk::BufferCopy{
                                            .srcOffset = sizeof(GPU_Node) * inspectNodeIdx,
                                            .dstOffset = sizeof(GPU_Node) * inspectNodeIdx, .size = sizeof(GPU_Node)
                                        });
@@ -1625,7 +1643,7 @@ private:
 
             if (!isHeadless) {
                 const vk::RenderPassBeginInfo renderPassInfo{
-                    .renderPass = **renderPass, .framebuffer = *framebuffers[imageIndex],
+                    .renderPass = *renderPass, .framebuffer = *framebuffers[imageIndex],
                     .renderArea = {.offset = {0, 0}, .extent = swapchainExtent}, .clearValueCount = 1,
                     .pClearValues = &clearColor
                 };
@@ -1639,21 +1657,21 @@ private:
                 const vk::Rect2D dynamicScissor{.offset = {0, 0}, .extent = swapchainExtent};
                 cmd.setScissor(0, dynamicScissor);
 
-                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **streetPipeline);
+                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *streetPipeline);
 
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, **graphicsPipelineLayout, 0,
+                cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *graphicsPipelineLayout, 0,
                                        {*computeDescriptorSets[0]}, nullptr);
                 mapBounds.selected_car_id = selectedCarId;
-                cmd.pushConstants<GraphicsConstants>(**graphicsPipelineLayout, vk::ShaderStageFlagBits::eAllGraphics, 0,
+                cmd.pushConstants<GraphicsConstants>(*graphicsPipelineLayout, vk::ShaderStageFlagBits::eAllGraphics, 0,
                                                      mapBounds);
 
                 // Draw the Map
                 cmd.draw(2, totalEdges, 0, 0);
 
-                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **graphicsPipeline);
+                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
                 cmd.draw(6, totalCars, 0, 0);
 
-                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, **exitNodePipeline);
+                cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *exitNodePipeline);
                 cmd.draw(6, totalEdges, 0, 0);
 
                 ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), *cmd);
@@ -1663,8 +1681,8 @@ private:
             cmd.end();
 
             if (isHeadless) {
-                queue->submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*cmd}, nullptr);
-                queue->waitIdle();
+                queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*cmd}, nullptr);
+                queue.waitIdle();
                 takeSnapshot();
             } else {
                 constexpr vk::PipelineStageFlags waitStages = vk::PipelineStageFlagBits::eColorAttachmentOutput;
@@ -1673,15 +1691,15 @@ private:
                     .pWaitDstStageMask = &waitStages, .commandBufferCount = 1, .pCommandBuffers = &(*cmd),
                     .signalSemaphoreCount = 1, .pSignalSemaphores = &(*renderFinishedSemaphore)
                 };
-                queue->submit(submitInfo, nullptr);
+                queue.submit(submitInfo, nullptr);
 
                 const vk::PresentInfoKHR presentInfo{
-                    .waitSemaphoreCount = 1, .pWaitSemaphores = &(*renderFinishedSemaphore), .swapchainCount = 1,
-                    .pSwapchains = &(**swapchain), .pImageIndices = &imageIndex
+                    .waitSemaphoreCount = 1, .pWaitSemaphores = &*renderFinishedSemaphore, .swapchainCount = 1,
+                    .pSwapchains = &(*swapchain), .pImageIndices = &imageIndex
                 };
 
                 try {
-                    auto presentResult = queue->presentKHR(presentInfo);
+                    auto presentResult = queue.presentKHR(presentInfo);
                     if (presentResult == vk::Result::eSuboptimalKHR || framebufferResized) {
                         framebufferResized = false;
                         recreateSwapchain();
@@ -1690,50 +1708,50 @@ private:
                     framebufferResized = false;
                     recreateSwapchain();
                 }
-                queue->waitIdle();
+                queue.waitIdle();
             }
         }
-        device->waitIdle();
+        device.waitIdle();
         saveResults();
     }
 
     void takeSnapshot() {
         // 1. Record the copy commands
         const vk::CommandBufferAllocateInfo allocInfo{
-            .commandPool = **commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
+            .commandPool = *commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
         };
-        const vk::raii::CommandBuffers cmdBuffers{*device, allocInfo};
+        const vk::raii::CommandBuffers cmdBuffers{device, allocInfo};
         const vk::raii::CommandBuffer &cmd = cmdBuffers.front();
 
         cmd.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
         const vk::BufferCopy carCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Car) * totalCars};
-        cmd.copyBuffer(**carBuffer, **carReadbackBuffer, carCopy);
+        cmd.copyBuffer(*carBuffer, *carReadbackBuffer, carCopy);
 
         const vk::BufferCopy edgeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Edge) * totalEdges};
-        cmd.copyBuffer(**edgeBuffer, **edgeReadbackBuffer, edgeCopy);
+        cmd.copyBuffer(*edgeBuffer, *edgeReadbackBuffer, edgeCopy);
 
         const vk::BufferCopy nodeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Node) * cpuNodes.size()};
-        cmd.copyBuffer(**nodeBuffer, **nodeReadbackBuffer, nodeCopy);
+        cmd.copyBuffer(*nodeBuffer, *nodeReadbackBuffer, nodeCopy);
 
         cmd.end();
 
         // 2. Submit and wait for the GPU to finish copying
-        queue->submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &(*cmd)}, nullptr);
-        queue->waitIdle();
+        queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &(*cmd)}, nullptr);
+        queue.waitIdle();
 
         // 3. Map the memory and copy it into our C++ vectors
-        const void *mappedCars = carReadbackMemory->mapMemory(0, sizeof(GPU_Car) * totalCars);
+        const void *mappedCars = carReadbackMemory.mapMemory(0, sizeof(GPU_Car) * totalCars);
         std::memcpy(cpuCars.data(), mappedCars, sizeof(GPU_Car) * totalCars);
-        carReadbackMemory->unmapMemory();
+        carReadbackMemory.unmapMemory();
 
-        const void *mappedEdges = edgeReadbackMemory->mapMemory(0, sizeof(GPU_Edge) * totalEdges);
+        const void *mappedEdges = edgeReadbackMemory.mapMemory(0, sizeof(GPU_Edge) * totalEdges);
         std::memcpy(cpuEdges.data(), mappedEdges, sizeof(GPU_Edge) * totalEdges);
-        edgeReadbackMemory->unmapMemory();
+        edgeReadbackMemory.unmapMemory();
 
-        const void *mappedNodes = nodeReadbackMemory->mapMemory(0, sizeof(GPU_Node) * cpuNodes.size());
+        const void *mappedNodes = nodeReadbackMemory.mapMemory(0, sizeof(GPU_Node) * cpuNodes.size());
         std::memcpy(cpuNodes.data(), mappedNodes, sizeof(GPU_Node) * cpuNodes.size());
-        nodeReadbackMemory->unmapMemory();
+        nodeReadbackMemory.unmapMemory();
 
         statGarage = 0;
         statRoad = 0;
@@ -1745,16 +1763,16 @@ private:
 
         for (const auto &car: cpuCars) {
             if (car.state == CarState::Driving || car.state == CarState::Queuing) {
-                statRoad++;
+                ++statRoad;
                 totalSpeed += car.speed;
             } else if (car.state == CarState::Evacuated) {
-                statEvacuated++;
+                ++statEvacuated;
             } else if (car.state == CarState::Garage) {
-                statGarage++;
+                ++statGarage;
             } else if (car.state == CarState::Stuck) {
-                statStuck++;
+                ++statStuck;
             } else if (car.state == CarState::Disabled) {
-                statDisabled++;
+                ++statDisabled;
             }
         }
         statAvgSpeed = statRoad > 0 ? static_cast<float>(totalSpeed / statRoad) : 0.f;
@@ -1785,7 +1803,9 @@ private:
     }
 
     void selectClosestCar(const float worldX, const float worldY) {
-        if (cpuCars.empty()) return; // Must take a snapshot first!
+        if (cpuCars.empty()) {
+            return; // Must take a snapshot first!
+        }
 
         std::int32_t closestCarId = -1;
         float closestDistSq = std::numeric_limits<float>::max();
@@ -1794,15 +1814,16 @@ private:
             const GPU_Car &car = cpuCars[i];
 
             // Only select cars that are actually on the road
-            if (car.state == CarState::Evacuated || car.state == CarState::Garage)
+            if (car.state == CarState::Evacuated || car.state == CarState::Garage) {
                 continue;
+            }
 
             const GPU_Edge &edge = cpuEdges[car.current_edge_idx];
             const GPU_Node &startNode = cpuNodes[edge.start_node_idx];
             const GPU_Node &endNode = cpuNodes[edge.end_node_idx];
 
             // Interpolate car's world position along the edge
-            const float t = (edge.length > 0.f) ? (car.position / edge.length) : 0.f;
+            const float t = edge.length > 0.f ? car.position / edge.length : 0.f;
             const float carWorldX = startNode.x + t * (endNode.x - startNode.x);
             const float carWorldY = startNode.y + t * (endNode.y - startNode.y);
 
@@ -1827,7 +1848,9 @@ private:
     }
 
     void applyMarqueeSelection() {
-        if (cpuNodes.empty() || allExitNodes.empty()) return;
+        if (cpuNodes.empty() || allExitNodes.empty()) {
+            return;
+        }
 
         float startWorldX = 0.f;
         float startWorldY = 0.f;
@@ -1945,7 +1968,7 @@ private:
         }
         results["exits"] = exitsJson;
 
-        if (std::ofstream out(outputFilePath); out.is_open()) {
+        if (std::ofstream out{outputFilePath}; out.is_open()) {
             out << results.dump(4);
             std::println("Simulation results saved to {}", outputFilePath);
         } else {
@@ -1954,7 +1977,7 @@ private:
     }
 };
 
-auto main(const std::int32_t argc, const char *argv[]) -> std::int32_t {
+std::int32_t main(const std::int32_t argc, const char *argv[]) {
     std::string configPath = "config.json";
     if (argc > 1) {
         configPath = argv[1];
