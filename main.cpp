@@ -412,7 +412,7 @@ private:
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
-        const ImGuiIO &io = ImGui::GetIO();
+        ImGui::GetIO();
         ImGui::StyleColorsDark();
 
         ImGui_ImplGlfw_InitForVulkan(window, true);
@@ -658,7 +658,7 @@ private:
         cmdBuffer.copyBuffer(*srcBuffer, *dstBuffer, copyRegion);
         cmdBuffer.end();
 
-        const vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &(*cmdBuffer)};
+        const vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &*cmdBuffer};
         queue.submit(submitInfo, nullptr);
         queue.waitIdle();
     }
@@ -872,7 +872,7 @@ private:
         };
 
         const vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
-            .setLayoutCount = 1, .pSetLayouts = &(*computeDescriptorSetLayout), .pushConstantRangeCount = 1,
+            .setLayoutCount = 1, .pSetLayouts = &*computeDescriptorSetLayout, .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange
         };
         computePipelineLayout = vk::raii::PipelineLayout{device, pipelineLayoutInfo};
@@ -908,7 +908,7 @@ private:
         descriptorPool = vk::raii::DescriptorPool{device, poolInfo};
 
         const vk::DescriptorSetAllocateInfo allocInfo{
-            .descriptorPool = *descriptorPool, .descriptorSetCount = 1, .pSetLayouts = &(*computeDescriptorSetLayout)
+            .descriptorPool = *descriptorPool, .descriptorSetCount = 1, .pSetLayouts = &*computeDescriptorSetLayout
         };
         computeDescriptorSets = vk::raii::DescriptorSets{device, allocInfo};
 
@@ -1635,15 +1635,15 @@ private:
             } else {
                 constexpr vk::PipelineStageFlags waitStages = vk::PipelineStageFlagBits::eColorAttachmentOutput;
                 const vk::SubmitInfo submitInfo{
-                    .waitSemaphoreCount = 1, .pWaitSemaphores = &(*imageAvailableSemaphore),
-                    .pWaitDstStageMask = &waitStages, .commandBufferCount = 1, .pCommandBuffers = &(*cmd),
-                    .signalSemaphoreCount = 1, .pSignalSemaphores = &(*renderFinishedSemaphore)
+                    .waitSemaphoreCount = 1, .pWaitSemaphores = &*imageAvailableSemaphore,
+                    .pWaitDstStageMask = &waitStages, .commandBufferCount = 1, .pCommandBuffers = &*cmd,
+                    .signalSemaphoreCount = 1, .pSignalSemaphores = &*renderFinishedSemaphore
                 };
                 queue.submit(submitInfo, nullptr);
 
                 const vk::PresentInfoKHR presentInfo{
                     .waitSemaphoreCount = 1, .pWaitSemaphores = &*renderFinishedSemaphore, .swapchainCount = 1,
-                    .pSwapchains = &(*swapchain), .pImageIndices = &imageIndex
+                    .pSwapchains = &*swapchain, .pImageIndices = &imageIndex
                 };
 
                 try {
