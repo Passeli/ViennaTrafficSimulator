@@ -4,10 +4,8 @@ project(BA)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 1. Find Vulkan SDK
 find_package(Vulkan REQUIRED)
 
-# 2. Automatically download and build GLFW
 include(FetchContent)
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -20,18 +18,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glfw)
 
-# ==========================================
-# --- AUTO-DOWNLOAD & BUILD DEAR IMGUI ---
-# ==========================================
 FetchContent_Declare(
         imgui
         GIT_REPOSITORY https://github.com/ocornut/imgui.git
         GIT_TAG docking
-        SOURCE_SUBDIR "" # <--- THE FIX: Tells CMake to skip looking for a CMakeLists.txt
+        SOURCE_SUBDIR ""
 )
 FetchContent_MakeAvailable(imgui)
 
-# Fetch nlohmann_json
 FetchContent_Declare(
         json
         GIT_REPOSITORY https://github.com/nlohmann/json.git
@@ -39,19 +33,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
-# ImGui doesn't have a native CMakeLists.txt, so we build it manually using the downloaded source
 add_library(imgui STATIC
         ${imgui_SOURCE_DIR}/imgui.cpp
         ${imgui_SOURCE_DIR}/imgui_draw.cpp
         ${imgui_SOURCE_DIR}/imgui_tables.cpp
         ${imgui_SOURCE_DIR}/imgui_widgets.cpp
         ${imgui_SOURCE_DIR}/imgui_demo.cpp
-        # Backends required for our specific Vulkan + GLFW engine
+
         ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
         ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
 )
 
-# Tell ImGui where to find Vulkan and GLFW headers
 target_include_directories(imgui PUBLIC
         ${imgui_SOURCE_DIR}
         ${imgui_SOURCE_DIR}/backends
@@ -59,10 +51,8 @@ target_include_directories(imgui PUBLIC
 )
 target_link_libraries(imgui PUBLIC glfw)
 
-# 3. Create the executable
 add_executable(BA main.cpp)
 
-# 4. Link the necessary libraries (Added ImGui and json!)
 target_link_libraries(BA PRIVATE
         Vulkan::Vulkan
         glfw
@@ -70,20 +60,12 @@ target_link_libraries(BA PRIVATE
         nlohmann_json::nlohmann_json
 )
 
-# 5. Enable dynamic dispatch for Vulkan-Hpp for maximum performance
 target_compile_definitions(BA PRIVATE
-        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
         VULKAN_HPP_NO_CONSTRUCTORS
 )
 
-# ==========================================
-# --- AUTO-COMPILE ALL SLANG SHADERS ---
-# ==========================================
-
-# Define your shader directory
 set(SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders")
 
-# Define input files relative to SHADER_DIR
 set(GRAPHICS_SLANG "${SHADER_DIR}/graphics.slang")
 set(CLEAR_EDGES_SLANG "${SHADER_DIR}/clear_edges.slang")
 set(BUILD_GRID_SLANG "${SHADER_DIR}/build_grid.slang")
@@ -91,7 +73,6 @@ set(PHYSICS_SLANG "${SHADER_DIR}/physics.slang")
 set(STREETS_SLANG "${SHADER_DIR}/streets.slang")
 set(EXIT_NODES_SLANG "${SHADER_DIR}/exit_nodes.slang")
 
-# Define output binaries
 set(VERT_SPV "${CMAKE_CURRENT_BINARY_DIR}/graphics_vert.spv")
 set(FRAG_SPV "${CMAKE_CURRENT_BINARY_DIR}/graphics_frag.spv")
 set(CLEAR_EDGES_SPV "${CMAKE_CURRENT_BINARY_DIR}/clear_edges.spv")
@@ -102,7 +83,6 @@ set(STREETS_FRAG_SPV "${CMAKE_CURRENT_BINARY_DIR}/streets_frag.spv")
 set(EXIT_NODES_VERT_SPV "${CMAKE_CURRENT_BINARY_DIR}/exit_nodes_vert.spv")
 set(EXIT_NODES_FRAG_SPV "${CMAKE_CURRENT_BINARY_DIR}/exit_nodes_frag.spv")
 
-# Helper to pass include directories to slangc (if common.slang is in the same dir)
 set(SLANG_INCLUDE_PATH "-I${SHADER_DIR}")
 
 add_custom_command(
@@ -163,11 +143,6 @@ add_custom_target(CompileAllShaders DEPENDS
         ${EXIT_NODES_FRAG_SPV}
 )
 add_dependencies(BA CompileAllShaders)
-
-
-# ==========================================
-# --- DATA ASSET PIPELINE (AUTO-COPY) ---
-# ==========================================
 
 set(NODE_BIN_SRC "${CMAKE_SOURCE_DIR}/vulkan_nodes.bin")
 set(EDGE_BIN_SRC "${CMAKE_SOURCE_DIR}/vulkan_edges.bin")

@@ -19,12 +19,11 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
                         uint instanceID: SV_InstanceID) {
   const Car car = cars[instanceID];
 
-  // If evacuated, disabled, or garaged, collapse and exit
   if (car.state == CarState::Evacuated || car.state == CarState::Disabled ||
       car.state == CarState::Garage) {
     VertexOutput output;
-    output.position = float4(2.0, 2.0, 0.0, 1.0);
-    output.color = float3(0.0, 0.0, 0.0);
+    output.position = float4(2., 2., 0., 1.);
+    output.color = float3(0., 0., 0.);
     return output;
   }
 
@@ -32,12 +31,10 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
   const Node start_node = nodes[edge.start_node_idx];
   const Node end_node = nodes[edge.end_node_idx];
 
-  // Interpolate world position
-  const float t = edge.length > 0.0 ? (car.position / edge.length) : 0.0;
+  const float t = edge.length > 0.0 ? (car.position / edge.length) : 0.;
   const float car_x = lerp(start_node.x, end_node.x, t);
   const float car_y = lerp(start_node.y, end_node.y, t);
 
-  // 1. Pan and Zoom Projection
   const float local_x = (car_x - pc.camera_x) * pc.zoom_level;
   const float local_y = (car_y - pc.camera_y) * pc.zoom_level;
 
@@ -48,14 +45,14 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
 
   float3 debug_color;
   if (is_selected) {
-    debug_color = float3(1.0, 0.0, 1.0); // Neon Pink/Fuchsia
+    debug_color = float3(1., 0., 1.); // Neon Pink/Fuchsia
   } else if (car.state == CarState::Driving) {
     const float speed_ratio =
-        clamp(car.speed / max(edge.max_speed, 1.0), 0.0, 1.0);
+        clamp(car.speed / max(edge.max_speed, 1.), 0., 1.);
     debug_color = lerp(float3(0.95, 0.25, 0.15), float3(0.15, 0.85, 0.35),
                        speed_ratio); // Red to Green speed gradient
   } else if (car.state == CarState::Stuck) {
-    debug_color = float3(1.0, 0.65, 0.0); // Amber/Orange
+    debug_color = float3(1., 0.65, 0.0); // Amber/Orange
   } else {
     debug_color = float3(0.9, 0.1, 0.1); // Coral Red for Queuing/Blocked
   }
@@ -76,7 +73,7 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
   const float ry = offset.y * size;
 
   VertexOutput output;
-  output.position = float4(nx + rx, -(ny + ry), 0.0, 1.0);
+  output.position = float4(nx + rx, -(ny + ry), 0., 1.);
   output.color = debug_color;
 
   return output;
@@ -84,5 +81,5 @@ VertexOutput vertexMain(uint vertexID: SV_VertexID,
 
 [shader("fragment")]
 float4 fragmentMain(VertexOutput input) : SV_Target {
-  return float4(input.color, 1.0);
+  return float4(input.color, 1.);
 }

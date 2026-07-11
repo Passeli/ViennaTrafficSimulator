@@ -10,13 +10,12 @@
 #include <string>
 #include <string_view>
 #include <print>
-#include <cstdint>
 #include <memory>
 #include <iostream>
 #include <algorithm>
 #include <queue>
-#include <set>
 #include <chrono>
+#include <unordered_set>
 #include <nlohmann/json.hpp>
 
 #include "common.hpp"
@@ -41,8 +40,6 @@ std::vector<T> loadBinaryData(const std::string_view filepath) {
 
     return buffer;
 }
-
-VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 class EvacuationEngine {
 public:
@@ -100,7 +97,6 @@ public:
         createComputePipeline();
 
         if (!isHeadless) {
-            // Refactored startup sequence to support swapchain recreation
             createSwapchain();
             createRenderPass();
             createGraphicsPipeline();
@@ -175,34 +171,28 @@ private:
     vk::raii::Pipeline exitNodePipeline = nullptr;
     GraphicsConstants mapBounds;
 
-    // --- SIMULATION CONTROLS ---
     bool isPaused = true;
     std::int32_t simSpeed = 1;
     bool framebufferResized = false;
 
-    // --- CAMERA INTERACTION STATE ---
     bool isDragging = false;
     double lastMouseX = 0.;
     double lastMouseY = 0.;
 
-    // --- MARQUEE SELECTION STATE ---
     bool isSelecting = false;
     double startMouseX = 0.;
     double startMouseY = 0.;
     double currentMouseX = 0.;
     double currentMouseY = 0.;
 
-    // --- INSPECT STATE ---
     bool isInspecting = false;
     double inspectMouseX = 0.;
     double inspectMouseY = 0.;
 
-    // --- CPU SHADOW COPIES ---
     std::vector<GPU_Car> cpuCars;
     std::vector<GPU_Edge> cpuEdges;
     std::vector<GPU_Node> cpuNodes;
 
-    // --- READBACK BUFFERS (Host Visible) ---
     vk::raii::Buffer carReadbackBuffer = nullptr;
     vk::raii::DeviceMemory carReadbackMemory = nullptr;
     vk::raii::Buffer edgeReadbackBuffer = nullptr;
@@ -210,7 +200,6 @@ private:
     vk::raii::Buffer nodeReadbackBuffer = nullptr;
     vk::raii::DeviceMemory nodeReadbackMemory = nullptr;
 
-    // --- UI STATE ---
     std::int32_t selectedCarId = 0;
     bool imguiInitialized = false;
 
@@ -224,7 +213,6 @@ private:
     double participation = 1.0;
     bool hasStarted = false;
 
-    // --- METRICS HISTORY ---
     std::vector<std::int32_t> flowrateHistory;
     std::vector<std::int32_t> evacuatedHistory;
     std::vector<std::int32_t> garageHistory;
@@ -234,11 +222,10 @@ private:
     float lastRecordTime = 0.f;
     std::int32_t lastEvacuatedCount = 0;
 
-    // --- GRAPH ROUTING DATA (NEW) ---
     struct IncomingEdge {
-        std::int32_t source_node;
-        std::int32_t edge_idx;
-        float travel_time;
+        std::int32_t source_node = 0;
+        std::int32_t edge_idx = 0;
+        float travel_time = 0.f;
     };
 
     std::vector<std::vector<IncomingEdge> > reverseGraph;
@@ -248,19 +235,17 @@ private:
     std::vector<std::vector<std::int32_t> > exitFlowrateHistory;
     std::vector<std::int32_t> exitLastEvacuatedCount;
 
-    // --- ROUTING FUNCTIONS (NEW) ---
     void recalculateGPS() {
         std::println("Recalculating City-Wide GPS Routes...");
         const auto startTime = std::chrono::high_resolution_clock::now();
 
-        // 0. Count cars and detect stuck cars on each edge
         std::vector edge_car_counts(totalEdges, 0);
         std::vector edge_has_stuck(totalEdges, false);
         if (!cpuCars.empty()) {
             for (const auto &car: cpuCars) {
                 if (car.state == CarState::Driving || car.state == CarState::Queuing || car.state == CarState::Stuck) {
                     if (car.current_edge_idx >= 0 && car.current_edge_idx < static_cast<std::int32_t>(totalEdges)) {
-                        edge_car_counts[car.current_edge_idx]++;
+                        ++edge_car_counts[car.current_edge_idx];
                         if (car.state == CarState::Stuck) {
                             edge_has_stuck[car.current_edge_idx] = true;
                         }
@@ -269,12 +254,10 @@ private:
             }
         }
 
-        // 1. Reset all edges to have no destination and update exit-edge padding
         for (auto &edge: cpuEdges) {
             edge.next_edge_idx = -1;
         }
 
-        // Update node types for exits
         for (std::size_t i = 0; i < allExitNodes.size(); ++i) {
             const std::int32_t nodeIdx = allExitNodes[i];
             cpuNodes[nodeIdx].type = isExitOpen[i] ? NodeType::OpenExit : NodeType::ClosedExit;
@@ -283,11 +266,9 @@ private:
         std::vector min_travel_time(cpuNodes.size(), std::numeric_limits<float>::max());
         std::vector next_node_to_exit(cpuNodes.size(), -1);
 
-        // Priority Queue: {travel_time, node_idx}
-        using NodeRecord = std::pair<float, std::int32_t>;
+        using NodeRecord = std::pair<float, std::int32_t>; // {travel_time, node_idx}
         std::priority_queue<NodeRecord, std::vector<NodeRecord>, std::greater<> > pq;
 
-        // 2. Seed the algorithm with all CURRENTLY OPEN exits
         for (std::size_t i = 0; i < allExitNodes.size(); ++i) {
             if (isExitOpen[i]) {
                 const std::int32_t exit_idx = allExitNodes[i];
@@ -296,7 +277,6 @@ private:
             }
         }
 
-        // 3. Run Dijkstra backwards
         while (!pq.empty()) {
             const auto [current_time, current_node] = pq.top();
             pq.pop();
@@ -309,9 +289,8 @@ private:
                 float travel_time = incoming.travel_time;
                 if (!cpuCars.empty()) {
                     if (edge_has_stuck[incoming.edge_idx]) {
-                        travel_time = 1e6f; // Blocked street penalty
+                        travel_time = 1e6f;
                     } else {
-                        // Estimate edge vehicle capacity based on 5. meters per car
                         const float capacity = std::max(cpuEdges[incoming.edge_idx].length / 5.f, 1.f);
                         const float congestion = static_cast<float>(edge_car_counts[incoming.edge_idx]) / capacity;
                         // BPR (Bureau of Public Roads) congestion function
@@ -328,7 +307,6 @@ private:
             }
         }
 
-        // 4. Bake the fast O(1) paths into the Edge array
         for (std::int32_t i = 0; i < totalEdges; ++i) {
             const std::int32_t end_node = cpuEdges[i].end_node_idx;
             const std::int32_t target_node = next_node_to_exit[end_node];
@@ -349,80 +327,66 @@ private:
     }
 
     void triggerDynamicReroute() {
-        // 1. Force the GPU to finish its current frame and pause
         device.waitIdle();
         const bool wasPaused = isPaused;
         isPaused = true;
 
-        // 2. Run the CPU Pathfinding
         recalculateGPS();
 
-        // 3. Upload the newly updated cpuEdges and cpuNodes arrays to VRAM
         {
             const vk::DeviceSize bufferSize = sizeof(GPU_Edge) * totalEdges;
-            vk::raii::Buffer stagingBuffer = nullptr;
-            vk::raii::DeviceMemory stagingMemory = nullptr;
-            std::tie(stagingBuffer, stagingMemory) = createBuffer(
+            const auto [stagingBuffer, stagingMemory] = createBuffer(
                 bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
             );
-            void *mappedData = stagingMemory.mapMemory(0, bufferSize);
-            std::memcpy(mappedData, cpuEdges.data(), bufferSize);
+            auto *mappedData = static_cast<GPU_Edge *>(stagingMemory.mapMemory(0, bufferSize));
+            std::ranges::copy(cpuEdges, mappedData);
             stagingMemory.unmapMemory();
             copyBuffer(stagingBuffer, edgeBuffer, bufferSize);
         }
 
         {
             const vk::DeviceSize bufferSize = sizeof(GPU_Node) * cpuNodes.size();
-            vk::raii::Buffer stagingBuffer = nullptr;
-            vk::raii::DeviceMemory stagingMemory = nullptr;
-            std::tie(stagingBuffer, stagingMemory) = createBuffer(
+            const auto [stagingBuffer, stagingMemory] = createBuffer(
                 bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
                 vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
             );
-            void *mappedData = stagingMemory.mapMemory(0, bufferSize);
-            std::memcpy(mappedData, cpuNodes.data(), bufferSize);
+            auto *mappedData = static_cast<GPU_Node *>(stagingMemory.mapMemory(0, bufferSize));
+            std::ranges::copy(cpuNodes, mappedData);
             stagingMemory.unmapMemory();
             copyBuffer(stagingBuffer, nodeBuffer, bufferSize);
         }
 
-        // 4. Resume the simulation
         isPaused = wasPaused;
     }
 
-    // --- VULKAN ENGINE ---
     void recreateSwapchain() {
         std::int32_t width = 0;
         std::int32_t height = 0;
         glfwGetFramebufferSize(window, &width, &height);
         while (width == 0 || height == 0) {
-            // Pause execution if window is minimized
             glfwGetFramebufferSize(window, &width, &height);
             glfwWaitEvents();
         }
 
-        device.waitIdle(); // Ensure GPU isn't using old swapchain resources
+        device.waitIdle();
 
-        // Destroy the old objects first
         framebuffers.clear();
         swapchainImageViews.clear();
         swapchain = nullptr;
 
-        // Rebuild them with the new dimensions
         createSwapchain();
         createFramebuffers();
 
-        // Update aspect ratio for rendering
         mapBounds.aspect_ratio = static_cast<float>(swapchainExtent.width) / static_cast<float>(swapchainExtent.height);
     }
 
     static void framebufferResizeCallback(GLFWwindow *window, const std::int32_t width, const std::int32_t height) {
-        auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(window));
-        engine->framebufferResized = true;
+        auto &engine = *static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(window));
+        engine.framebufferResized = true;
     }
 
     void initImGui() {
-        // 1. Create a massive descriptor pool specifically for ImGui
         const std::array<vk::DescriptorPoolSize, 11> poolSizes = {
             {
                 {vk::DescriptorType::eSampler, 1000},
@@ -446,14 +410,11 @@ private:
         };
         imguiPool = vk::raii::DescriptorPool{device, poolInfo};
 
-        // 2. Initialize the core ImGui context
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         const ImGuiIO &io = ImGui::GetIO();
-        (void) io;
         ImGui::StyleColorsDark();
 
-        // 3. Initialize the GLFW and Vulkan Backends
         ImGui_ImplGlfw_InitForVulkan(window, true);
 
         ImGui_ImplVulkan_InitInfo init_info = {};
@@ -486,118 +447,112 @@ private:
         glfwSetWindowUserPointer(window, this);
         glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 
-        // A. SCROLL CALLBACK (ZOOM IN / OUT)
         glfwSetScrollCallback(window, [](GLFWwindow *win, const double xoffset, const double yoffset) {
-            // --- THE FIX: Ignore scroll if hovering over the UI ---
-            if (ImGui::GetIO().WantCaptureMouse) return;
-
-            auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
-            if (yoffset > 0) {
-                engine->mapBounds.zoom_level *= 1.15f;
-            } else {
-                engine->mapBounds.zoom_level /= 1.15f;
+            // ignore scroll if hovering over the UI
+            if (ImGui::GetIO().WantCaptureMouse) {
+                return;
             }
-            engine->mapBounds.zoom_level = std::clamp(engine->mapBounds.zoom_level, 0.5f, 500.f);
+
+            auto &engine = *static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
+            if (yoffset > 0) {
+                engine.mapBounds.zoom_level *= 1.15f;
+            } else {
+                engine.mapBounds.zoom_level /= 1.15f;
+            }
+            engine.mapBounds.zoom_level = std::clamp(engine.mapBounds.zoom_level, 0.5f, 500.f);
         });
 
-        // B. MOUSE BUTTON CALLBACK (START / STOP DRAG & PICKING)
         glfwSetMouseButtonCallback(
             window, [](GLFWwindow *win, const std::int32_t button, const std::int32_t action, const std::int32_t mods) {
-                if (ImGui::GetIO().WantCaptureMouse) return;
+                if (ImGui::GetIO().WantCaptureMouse) {
+                    return;
+                }
 
-                auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
+                auto &engine = *static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
 
                 if (button == GLFW_MOUSE_BUTTON_LEFT) {
                     if (action == GLFW_PRESS) {
                         if (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
                             glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
-                            engine->isSelecting = true;
-                            glfwGetCursorPos(win, &engine->startMouseX, &engine->startMouseY);
-                            engine->currentMouseX = engine->startMouseX;
-                            engine->currentMouseY = engine->startMouseY;
+                            engine.isSelecting = true;
+                            glfwGetCursorPos(win, &engine.startMouseX, &engine.startMouseY);
+                            engine.currentMouseX = engine.startMouseX;
+                            engine.currentMouseY = engine.startMouseY;
                         } else {
-                            engine->isDragging = true;
-                            glfwGetCursorPos(win, &engine->lastMouseX, &engine->lastMouseY);
+                            engine.isDragging = true;
+                            glfwGetCursorPos(win, &engine.lastMouseX, &engine.lastMouseY);
                         }
                     } else if (action == GLFW_RELEASE) {
-                        if (engine->isSelecting) {
-                            engine->isSelecting = false;
-                            engine->applyMarqueeSelection();
+                        if (engine.isSelecting) {
+                            engine.isSelecting = false;
+                            engine.applyMarqueeSelection();
                         }
-                        engine->isDragging = false;
+                        engine.isDragging = false;
                     }
                 }
 
-                // Right-Click = Inspect Car
+                // inspect car
                 if (button == GLFW_MOUSE_BUTTON_RIGHT) {
                     if (action == GLFW_PRESS) {
-                        engine->isInspecting = true;
-                        glfwGetCursorPos(win, &engine->inspectMouseX, &engine->inspectMouseY);
+                        engine.isInspecting = true;
+                        glfwGetCursorPos(win, &engine.inspectMouseX, &engine.inspectMouseY);
 
-                        float worldX = 0.f;
-                        float worldY = 0.f;
-                        engine->screenToWorld(engine->inspectMouseX, engine->inspectMouseY, worldX, worldY);
-                        engine->takeSnapshot();
-                        engine->selectClosestCar(worldX, worldY);
+                        const auto [worldX, worldY] = engine.screenToWorld(engine.inspectMouseX, engine.inspectMouseY);
+                        engine.takeSnapshot();
+                        engine.selectClosestCar(worldX, worldY);
                     } else if (action == GLFW_RELEASE) {
-                        engine->isInspecting = false;
+                        engine.isInspecting = false;
                     }
                 }
             });
 
-        // C. CURSOR POSITION CALLBACK (PANNING THE MAP / UPDATING MARQUEE)
         glfwSetCursorPosCallback(window, [](GLFWwindow *win, const double xpos, const double ypos) {
-            auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
-            if (engine->isSelecting) {
-                engine->currentMouseX = xpos;
-                engine->currentMouseY = ypos;
-            } else if (engine->isInspecting) {
-                engine->inspectMouseX = xpos;
-                engine->inspectMouseY = ypos;
-            } else if (engine->isDragging) {
-                const double deltaX = xpos - engine->lastMouseX;
-                const double deltaY = ypos - engine->lastMouseY;
+            auto &engine = *static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
 
-                const float screenFactorX = engine->mapBounds.extent_height / static_cast<float>(engine->
-                                                swapchainExtent.height);
-                const float screenFactorY = engine->mapBounds.extent_height / static_cast<float>(engine->
-                                                swapchainExtent.height);
+            if (engine.isSelecting) {
+                engine.currentMouseX = xpos;
+                engine.currentMouseY = ypos;
+            } else if (engine.isInspecting) {
+                engine.inspectMouseX = xpos;
+                engine.inspectMouseY = ypos;
+            } else if (engine.isDragging) {
+                const double deltaX = xpos - engine.lastMouseX;
+                const double deltaY = ypos - engine.lastMouseY;
 
-                engine->mapBounds.camera_x -= static_cast<float>(deltaX) * (
-                    screenFactorX / engine->mapBounds.zoom_level);
-                engine->mapBounds.camera_y += static_cast<float>(deltaY) * (
-                    screenFactorY / engine->mapBounds.zoom_level);
+                const float screenFactorX = engine.mapBounds.extent_height / static_cast<float>(engine.swapchainExtent.
+                                                height);
+                const float screenFactorY = engine.mapBounds.extent_height / static_cast<float>(engine.swapchainExtent.
+                                                height);
 
-                engine->lastMouseX = xpos;
-                engine->lastMouseY = ypos;
+                engine.mapBounds.camera_x -= static_cast<float>(deltaX) * (screenFactorX / engine.mapBounds.zoom_level);
+                engine.mapBounds.camera_y += static_cast<float>(deltaY) * (screenFactorY / engine.mapBounds.zoom_level);
+
+                engine.lastMouseX = xpos;
+                engine.lastMouseY = ypos;
             }
         });
 
-        // D. KEYBOARD CALLBACK
         glfwSetKeyCallback(
             window, [](GLFWwindow *win, const std::int32_t key, const std::int32_t scancode, const std::int32_t action,
                        const std::int32_t mods) {
-                // --- THE FIX: Ignore keyboard shortcuts if typing inside an ImGui text box ---
-                if (ImGui::GetIO().WantCaptureKeyboard) return;
+                auto &engine = *static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
 
-                auto *engine = static_cast<EvacuationEngine *>(glfwGetWindowUserPointer(win));
                 if (action == GLFW_PRESS) {
                     if (key == GLFW_KEY_SPACE) {
-                        engine->isPaused = !engine->isPaused;
-                        if (engine->isPaused) {
-                            engine->takeSnapshot();
+                        engine.isPaused = !engine.isPaused;
+                        if (engine.isPaused) {
+                            engine.takeSnapshot();
                         }
                     } else if (key == GLFW_KEY_UP || key == GLFW_KEY_RIGHT) {
-                        engine->simSpeed = std::min(engine->simSpeed * 2, 256);
+                        engine.simSpeed = std::min(engine.simSpeed * 2, 256);
                     } else if (key == GLFW_KEY_DOWN || key == GLFW_KEY_LEFT) {
-                        engine->simSpeed = std::max(engine->simSpeed / 2, 1);
+                        engine.simSpeed = std::max(engine.simSpeed / 2, 1);
                     }
                 }
             });
     }
 
     void initVulkan() {
-        VULKAN_HPP_DEFAULT_DISPATCHER.init();
         context = vk::raii::Context{};
 
         constexpr vk::ApplicationInfo appInfo{
@@ -617,15 +572,14 @@ private:
         };
 
         instance = vk::raii::Instance{context, createInfo};
-        VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
 
         const vk::raii::PhysicalDevices physicalDevices{instance};
         physicalDevice = physicalDevices.front();
 
         const std::vector queueFamilies{physicalDevice.getQueueFamilyProperties()};
         for (std::uint32_t i = 0; i < queueFamilies.size(); ++i) {
-            if ((queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics) &&
-                (queueFamilies[i].queueFlags & vk::QueueFlagBits::eCompute)) {
+            if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics &&
+                queueFamilies[i].queueFlags & vk::QueueFlagBits::eCompute) {
                 queueFamilyIndex = i;
                 break;
             }
@@ -653,7 +607,6 @@ private:
         };
 
         device = vk::raii::Device{physicalDevice, deviceCreateInfo};
-        VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
         queue = vk::raii::Queue{device, queueFamilyIndex, 0};
 
         const vk::CommandPoolCreateInfo poolInfo{
@@ -711,13 +664,9 @@ private:
     }
 
     template<typename T>
-    void uploadVectorToGPU(std::span<const T> data, vk::raii::Buffer &outBuffer,
-                           vk::raii::DeviceMemory &outMemory) {
+    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> uploadVectorToGPU(std::span<const T> data) {
         const vk::DeviceSize bufferSize = sizeof(T) * data.size();
-
-        vk::raii::Buffer stagingBuffer = nullptr;
-        vk::raii::DeviceMemory stagingMemory = nullptr;
-        std::tie(stagingBuffer, stagingMemory) = createBuffer(
+        const auto [stagingBuffer, stagingMemory] = createBuffer(
             bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
         );
@@ -726,18 +675,15 @@ private:
         std::memcpy(mappedData, data.data(), static_cast<std::size_t>(bufferSize));
         stagingMemory.unmapMemory();
 
-        vk::raii::Buffer deviceLocalBuffer = nullptr;
-        vk::raii::DeviceMemory deviceLocalMemory = nullptr;
-        std::tie(deviceLocalBuffer, deviceLocalMemory) = createBuffer(
+        auto [deviceLocalBuffer, deviceLocalMemory] = createBuffer(
             bufferSize,
             vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer |
             vk::BufferUsageFlagBits::eTransferSrc,
             vk::MemoryPropertyFlagBits::eDeviceLocal
         );
 
-        outBuffer = std::move(deviceLocalBuffer);
-        outMemory = std::move(deviceLocalMemory);
-        copyBuffer(stagingBuffer, outBuffer, bufferSize);
+        copyBuffer(stagingBuffer, deviceLocalBuffer, bufferSize);
+        return {std::move(deviceLocalBuffer), std::move(deviceLocalMemory)};
     }
 
     void applyParticipation() {
@@ -762,14 +708,14 @@ private:
             const std::int32_t edge_idx = c.current_edge_idx;
             if (edge_idx >= 0 && edge_idx < cpuEdges.size()) {
                 if (cars_spawned_per_edge[edge_idx] < target_per_edge[edge_idx]) {
-                    cars_spawned_per_edge[edge_idx]++;
+                    ++cars_spawned_per_edge[edge_idx];
                 } else {
-                    c.state = CarState::Disabled; // Disable this car
+                    c.state = CarState::Disabled;
                 }
             }
         }
 
-        uploadVectorToGPU<GPU_Car>(rawCars, carBuffer, carMemory);
+        std::tie(carBuffer, carMemory) = uploadVectorToGPU<GPU_Car>(rawCars);
         cpuCars = rawCars;
         updateDescriptorSets();
         takeSnapshot();
@@ -782,7 +728,7 @@ private:
 
         for (auto &n: nodes) {
             n.lock = -1;
-            // Multiply X coordinates by cos(48.2082) to fix map projection distortion
+            // multiply X coordinates by cos(48.2082) to fix map projection distortion
             n.x *= 0.6664f;
         }
 
@@ -790,29 +736,29 @@ private:
             e.head_car_idx = -1;
             e.garage_lock = -1;
         }
-        for (auto &c: rawCars) c.next_car_idx = -1;
+        for (auto &c: rawCars) {
+            c.next_car_idx = -1;
+        }
 
         totalCars = static_cast<std::uint32_t>(rawCars.size());
         totalEdges = static_cast<std::uint32_t>(rawEdges.size());
 
-        uploadVectorToGPU<GPU_Node>(nodes, nodeBuffer, nodeMemory);
-        uploadVectorToGPU<GPU_Edge>(rawEdges, edgeBuffer, edgeMemory);
-        uploadVectorToGPU<GPU_Car>(rawCars, carBuffer, carMemory);
+        std::tie(nodeBuffer, nodeMemory) = uploadVectorToGPU<GPU_Node>(nodes);
+        std::tie(edgeBuffer, edgeMemory) = uploadVectorToGPU<GPU_Edge>(rawEdges);
+        std::tie(carBuffer, carMemory) = uploadVectorToGPU<GPU_Car>(rawCars);
 
-        // --- 1. Find the boundaries using local variables ---
-        float temp_min_x = 100000000.f;
-        float temp_max_x = -100000000.f;
-        float temp_min_y = 100000000.f;
-        float temp_max_y = -100000000.f;
+        float temp_min_x = std::numeric_limits<float>::max();
+        float temp_max_x = std::numeric_limits<float>::lowest();
+        float temp_min_y = std::numeric_limits<float>::max();
+        float temp_max_y = std::numeric_limits<float>::lowest();
 
         for (const auto &n: nodes) {
-            if (n.x < temp_min_x) temp_min_x = n.x;
-            if (n.x > temp_max_x) temp_max_x = n.x;
-            if (n.y < temp_min_y) temp_min_y = n.y;
-            if (n.y > temp_max_y) temp_max_y = n.y;
+            temp_min_x = std::min(temp_min_x, n.x);
+            temp_max_x = std::max(temp_max_x, n.x);
+            temp_min_y = std::min(temp_min_y, n.y);
+            temp_max_y = std::max(temp_max_y, n.y);
         }
 
-        // --- 2. Setup the Camera (mapBounds) ---
         const float width_meters = temp_max_x - temp_min_x;
         const float height_meters = temp_max_y - temp_min_y;
 
@@ -823,27 +769,23 @@ private:
         mapBounds.extent_height = height_meters;
         mapBounds.aspect_ratio = static_cast<float>(WIDTH) / static_cast<float>(HEIGHT);
 
-        // Initialize CPU vectors to hold the data
         cpuCars = rawCars;
         cpuEdges = rawEdges;
         cpuNodes = nodes;
 
-        // Create Readback Buffers (Host Visible + Coherent so the CPU can read them)
-        auto createReadback = [&](const vk::DeviceSize size, vk::raii::Buffer &buf,
-                                  vk::raii::DeviceMemory &mem) {
-            std::tie(buf, mem) = createBuffer(size, vk::BufferUsageFlagBits::eTransferDst,
-                                              vk::MemoryPropertyFlagBits::eHostVisible |
-                                              vk::MemoryPropertyFlagBits::eHostCoherent);
+        auto createReadback = [&](const vk::DeviceSize size) {
+            return createBuffer(size, vk::BufferUsageFlagBits::eTransferDst,
+                                vk::MemoryPropertyFlagBits::eHostVisible |
+                                vk::MemoryPropertyFlagBits::eHostCoherent);
         };
 
-        createReadback(sizeof(GPU_Car) * totalCars, carReadbackBuffer, carReadbackMemory);
-        createReadback(sizeof(GPU_Edge) * totalEdges, edgeReadbackBuffer, edgeReadbackMemory);
-        createReadback(sizeof(GPU_Node) * nodes.size(), nodeReadbackBuffer, nodeReadbackMemory);
+        std::tie(carReadbackBuffer, carReadbackMemory) = createReadback(sizeof(GPU_Car) * totalCars);
+        std::tie(edgeReadbackBuffer, edgeReadbackMemory) = createReadback(sizeof(GPU_Edge) * totalEdges);
+        std::tie(nodeReadbackBuffer, nodeReadbackMemory) = createReadback(sizeof(GPU_Node) * nodes.size());
 
-        // --- NEW: BUILD ROUTING GRAPHS ---
         reverseGraph.resize(cpuNodes.size());
         forwardGraph.resize(cpuNodes.size());
-        std::set<std::int32_t> exitNodeSet;
+        std::unordered_set<std::int32_t> exitNodeSet;
 
         for (std::int32_t i = 0; i < totalEdges; ++i) {
             const GPU_Edge &edge = cpuEdges[i];
@@ -857,7 +799,6 @@ private:
             forwardGraph[edge.start_node_idx].push_back(i);
         }
 
-        // Detect exits only from nodes marked as exits in the binary file
         for (std::size_t i = 0; i < cpuNodes.size(); ++i) {
             if (cpuNodes[i].type == NodeType::OpenExit || cpuNodes[i].type == NodeType::ClosedExit) {
                 exitNodeSet.insert(static_cast<std::int32_t>(i));
@@ -869,7 +810,6 @@ private:
         exitFlowrateHistory.assign(allExitNodes.size(), std::vector<std::int32_t>());
         exitLastEvacuatedCount.assign(allExitNodes.size(), 0);
 
-        // Apply config closed exits (supports both exit index 0-124 and global node index)
         for (const std::int32_t entry: configClosedExits) {
             if (entry >= 0 && entry < static_cast<std::int32_t>(allExitNodes.size())) {
                 isExitOpen[entry] = false;
@@ -880,12 +820,10 @@ private:
             }
         }
 
-        // Run initial GPS recalculation to bake the closed exits routing and node states
         recalculateGPS();
 
-        // Re-upload the updated nodes and edges to the GPU
-        uploadVectorToGPU<GPU_Node>(cpuNodes, nodeBuffer, nodeMemory);
-        uploadVectorToGPU<GPU_Edge>(cpuEdges, edgeBuffer, edgeMemory);
+        std::tie(nodeBuffer, nodeMemory) = uploadVectorToGPU<GPU_Node>(cpuNodes);
+        std::tie(edgeBuffer, edgeMemory) = uploadVectorToGPU<GPU_Edge>(cpuEdges);
     }
 
     void createComputePipeline() {
@@ -978,9 +916,9 @@ private:
     }
 
     void updateDescriptorSets() const {
-        const vk::DescriptorBufferInfo nodeBufferInfo{.buffer = *nodeBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
-        const vk::DescriptorBufferInfo edgeBufferInfo{.buffer = *edgeBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
-        const vk::DescriptorBufferInfo carBufferInfo{.buffer = *carBuffer, .offset = 0, .range = VK_WHOLE_SIZE};
+        const vk::DescriptorBufferInfo nodeBufferInfo{.buffer = *nodeBuffer, .offset = 0, .range = vk::WholeSize};
+        const vk::DescriptorBufferInfo edgeBufferInfo{.buffer = *edgeBuffer, .offset = 0, .range = vk::WholeSize};
+        const vk::DescriptorBufferInfo carBufferInfo{.buffer = *carBuffer, .offset = 0, .range = vk::WholeSize};
 
         const std::array<vk::WriteDescriptorSet, 3> descriptorWrites = {
             {
@@ -1022,7 +960,6 @@ private:
         }
         swapchainImageFormat = surfaceFormat.format;
 
-        // FETCH TRUE DIMENSIONS FROM GLFW (Fixes Extent Validation Error)
         std::int32_t width = 0;
         std::int32_t height = 0;
         glfwGetFramebufferSize(window, &width, &height);
@@ -1034,8 +971,9 @@ private:
         };
 
         std::uint32_t imageCount = capabilities.minImageCount + 1;
-        if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount)
+        if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount) {
             imageCount = capabilities.maxImageCount;
+        }
 
         const vk::SwapchainCreateInfoKHR createInfo{
             .flags = {}, .surface = *surface, .minImageCount = imageCount, .imageFormat = surfaceFormat.format,
@@ -1064,7 +1002,6 @@ private:
             swapchainImageViews.emplace_back(device, viewInfo);
         }
 
-        // Update aspect ratio for rendering
         mapBounds.aspect_ratio = static_cast<float>(swapchainExtent.width) / static_cast<float>(swapchainExtent.height);
     }
 
@@ -1126,16 +1063,13 @@ private:
             .topology = vk::PrimitiveTopology::eTriangleList
         };
 
-        // --- NEW: DYNAMIC STATES ---
-        // This allows us to resize the window WITHOUT rebuilding the entire pipeline
-        constexpr std::array<vk::DynamicState, 2> dynamicStates = {
+        constexpr std::array dynamicStates = {
             vk::DynamicState::eViewport, vk::DynamicState::eScissor
         };
         const vk::PipelineDynamicStateCreateInfo dynamicStateInfo{
             .dynamicStateCount = 2, .pDynamicStates = dynamicStates.data()
         };
 
-        // Viewports are now ignored at build time due to dynamic state, but struct must exist
         constexpr vk::PipelineViewportStateCreateInfo viewportState{.viewportCount = 1, .scissorCount = 1};
 
         constexpr vk::PipelineRasterizationStateCreateInfo rasterizer{
@@ -1176,7 +1110,6 @@ private:
         };
         graphicsPipeline = vk::raii::Pipeline{device, nullptr, pipelineInfo};
 
-        // --- STREET PIPELINE ---
         const auto streetVertCode = loadBinaryData<std::uint32_t>("streets_vert.spv");
         const auto streetFragCode = loadBinaryData<std::uint32_t>("streets_frag.spv");
         const vk::raii::ShaderModule streetVertModule{
@@ -1203,7 +1136,6 @@ private:
 
         streetPipeline = vk::raii::Pipeline{device, nullptr, streetPipelineInfo};
 
-        // --- EXIT NODE PIPELINE ---
         const auto exitNodeVertCode = loadBinaryData<std::uint32_t>("exit_nodes_vert.spv");
         const auto exitNodeFragCode = loadBinaryData<std::uint32_t>("exit_nodes_frag.spv");
         const vk::raii::ShaderModule exitNodeVertModule{
@@ -1240,7 +1172,7 @@ private:
         const vk::raii::Semaphore imageAvailableSemaphore{device, vk::SemaphoreCreateInfo{}};
         const vk::raii::Semaphore renderFinishedSemaphore{device, vk::SemaphoreCreateInfo{}};
         constexpr vk::ClearValue clearColor{
-            .color = vk::ClearColorValue{std::array<float, 4>{0.05f, 0.05f, 0.1f, 1.f}}
+            .color = vk::ClearColorValue{std::array{0.05f, 0.05f, 0.1f, 1.f}}
         };
 
         auto lastFrameTime = std::chrono::high_resolution_clock::now();
@@ -1257,7 +1189,9 @@ private:
         while (true) {
             if (!isHeadless) {
                 glfwPollEvents();
-                if (glfwWindowShouldClose(window)) break;
+                if (glfwWindowShouldClose(window)) {
+                    break;
+                }
             } else {
                 if (simTime > 0.f && statRoad == 0) {
                     std::println("Simulation finished: no cars on the road or all cars on the road stuck.");
@@ -1276,9 +1210,7 @@ private:
 
                 {
                     const vk::DeviceSize bufferSize = sizeof(GPU_Edge) * totalEdges;
-                    vk::raii::Buffer stagingBuffer = nullptr;
-                    vk::raii::DeviceMemory stagingMemory = nullptr;
-                    std::tie(stagingBuffer, stagingMemory) = createBuffer(
+                    const auto [stagingBuffer, stagingMemory] = createBuffer(
                         bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
                         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
                     );
@@ -1338,7 +1270,8 @@ private:
             std::uint32_t imageIndex = 0;
             if (!isHeadless) {
                 try {
-                    auto [result, index] = swapchain.acquireNextImage(UINT64_MAX, *imageAvailableSemaphore, nullptr);
+                    auto [result, index] = swapchain.acquireNextImage(std::numeric_limits<std::uint64_t>::max(),
+                                                                      *imageAvailableSemaphore, nullptr);
                     if (result == vk::Result::eSuboptimalKHR) {
                         framebufferResized = true;
                     }
@@ -1378,7 +1311,7 @@ private:
                 ImGui::Spacing();
 
                 ImGui::BeginDisabled(hasStarted);
-                float participationFloat = static_cast<float>(participation);
+                auto participationFloat = static_cast<float>(participation);
                 if (ImGui::SliderFloat("Participation", &participationFloat, 0.f, 1.f, "%.2f")) {
                     participation = static_cast<double>(participationFloat);
                 }
@@ -1409,7 +1342,7 @@ private:
                 ImGui::Text("--- EVACUATION METRICS ---");
                 {
                     std::int32_t hours = static_cast<std::int32_t>(simTime) / 3600;
-                    std::int32_t minutes = (static_cast<std::int32_t>(simTime) % 3600) / 60;
+                    std::int32_t minutes = static_cast<std::int32_t>(simTime) % 3600 / 60;
                     float seconds = std::fmod(simTime, 60.f);
                     ImGui::Text("Simulation Time: %02d:%02d:%04.1f", hours, minutes, seconds);
                 }
@@ -1460,14 +1393,32 @@ private:
                     ImGui::BeginChild("CarData", ImVec2(0, 150), true);
                     ImGui::Text("--- CAR %d ---", selectedCarId);
 
-                    auto stateStr = "Unknown";
-                    if (car.state == CarState::Driving) stateStr = "Driving";
-                    if (car.state == CarState::Queuing) stateStr = "Queuing at Intersection";
-                    if (car.state == CarState::Evacuated) stateStr = "Evacuated!";
-                    if (car.state == CarState::Garage) stateStr = "In Garage";
-                    if (car.state == CarState::Stuck) stateStr = "Stuck";
+                    std::string carState;
 
-                    ImGui::Text("State: %s (%d)", stateStr, car.state);
+                    switch (car.state) {
+                        case CarState::Driving:
+                            carState = "Driving";
+                            break;
+                        case CarState::Queuing:
+                            carState = "Queuing at Intersection";
+                            break;
+                        case CarState::Evacuated:
+                            carState = "Evacuated!";
+                            break;
+                        case CarState::Garage:
+                            carState = "In Garage";
+                            break;
+                        case CarState::Stuck:
+                            carState = "Stuck";
+                            break;
+                        case CarState::Disabled:
+                            carState = "Disabled";
+                            break;
+                        default:
+                            carState = "Unknown";
+                    }
+
+                    ImGui::Text("State: %s (%d)", carState.c_str(), car.state);
                     ImGui::Text("Speed: %.2f m/s (%.1f km/h)", car.speed, car.speed * 3.6f);
                     ImGui::Text("Position: %.2f meters", car.position);
                     ImGui::Text("Current Edge ID: %d", car.current_edge_idx);
@@ -1489,7 +1440,7 @@ private:
                 ImGui::End();
 
                 if (isSelecting) {
-                    ImDrawList *const drawList = ImGui::GetForegroundDrawList();
+                    ImDrawList &drawList = *ImGui::GetForegroundDrawList();
                     const ImVec2 p_min{
                         static_cast<float>(std::min(startMouseX, currentMouseX)),
                         static_cast<float>(std::min(startMouseY, currentMouseY))
@@ -1498,16 +1449,16 @@ private:
                         static_cast<float>(std::max(startMouseX, currentMouseX)),
                         static_cast<float>(std::max(startMouseY, currentMouseY))
                     };
-                    drawList->AddRectFilled(p_min, p_max, IM_COL32(0, 150, 255, 60), 0.f);
-                    drawList->AddRect(p_min, p_max, IM_COL32(0, 150, 255, 255), 0.f, 0, 2.f);
+                    drawList.AddRectFilled(p_min, p_max, IM_COL32(0, 150, 255, 60), 0.f);
+                    drawList.AddRect(p_min, p_max, IM_COL32(0, 150, 255, 255), 0.f, 0, 2.f);
                 }
 
                 if (isInspecting) {
-                    ImDrawList *const drawList = ImGui::GetForegroundDrawList();
+                    ImDrawList &drawList = *ImGui::GetForegroundDrawList();
                     const ImVec2 center{static_cast<float>(inspectMouseX), static_cast<float>(inspectMouseY)};
                     const float r = worldDistanceToPixels(20.f / 111300.f);
-                    drawList->AddCircleFilled(center, r, IM_COL32(255, 165, 0, 40), 64);
-                    drawList->AddCircle(center, r, IM_COL32(255, 165, 0, 180), 64, 2.f);
+                    drawList.AddCircleFilled(center, r, IM_COL32(255, 165, 0, 40), 64);
+                    drawList.AddCircle(center, r, IM_COL32(255, 165, 0, 180), 64, 2.f);
                 }
 
                 ImGui::Render();
@@ -1519,15 +1470,13 @@ private:
             std::int32_t stepsToRun = 0;
             if (isHeadless) {
                 const float timeToNextSnapshot = 60.f - (simTime - lastSnapshotSimTime);
-                stepsToRun = static_cast<std::int32_t>(timeToNextSnapshot / 0.1f);
-                if (stepsToRun <= 0) stepsToRun = 1;
-                if (stepsToRun > 600) stepsToRun = 600;
+                stepsToRun = std::clamp(static_cast<std::int32_t>(timeToNextSnapshot / 0.1f), 1, 600);
             } else {
                 if (!isPaused) {
                     const double capped_dt = std::min(dt_real, 0.033);
                     accumulatedSimTimeQueue += capped_dt * simSpeed;
                     while (accumulatedSimTimeQueue >= 0.1) {
-                        stepsToRun++;
+                        ++stepsToRun;
                         accumulatedSimTimeQueue -= 0.1;
                     }
                     if (stepsToRun > 256) {
@@ -1552,7 +1501,7 @@ private:
                     const vk::BufferMemoryBarrier edgeBarrier{
                         .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
                         .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                        .buffer = *edgeBuffer, .offset = 0, .size = VK_WHOLE_SIZE
+                        .buffer = *edgeBuffer, .offset = 0, .size = vk::WholeSize
                     };
                     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
                                         vk::PipelineStageFlagBits::eComputeShader, {}, nullptr, edgeBarrier, nullptr);
@@ -1563,7 +1512,7 @@ private:
                     const vk::BufferMemoryBarrier carBarrier{
                         .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
                         .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                        .buffer = *carBuffer, .offset = 0, .size = VK_WHOLE_SIZE
+                        .buffer = *carBuffer, .offset = 0, .size = vk::WholeSize
                     };
                     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
                                         vk::PipelineStageFlagBits::eComputeShader, {}, nullptr, carBarrier, nullptr);
@@ -1583,12 +1532,12 @@ private:
                 }
 
                 if (!isHeadless) {
-                    const std::int32_t inspectEdgeIdx = (selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>
-                                                         (totalCars) && !cpuCars.empty())
+                    const std::int32_t inspectEdgeIdx = selectedCarId >= 0 && selectedCarId < static_cast<std::int32_t>
+                                                        (totalCars) && !cpuCars.empty()
                                                             ? cpuCars[selectedCarId].current_edge_idx
                                                             : -1;
-                    const std::int32_t inspectNodeIdx = (inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<
-                                                             std::int32_t>(totalEdges))
+                    const std::int32_t inspectNodeIdx = inspectEdgeIdx >= 0 && inspectEdgeIdx < static_cast<
+                                                            std::int32_t>(totalEdges)
                                                             ? cpuEdges[inspectEdgeIdx].end_node_idx
                                                             : -1;
 
@@ -1665,7 +1614,6 @@ private:
                 cmd.pushConstants<GraphicsConstants>(*graphicsPipelineLayout, vk::ShaderStageFlagBits::eAllGraphics, 0,
                                                      mapBounds);
 
-                // Draw the Map
                 cmd.draw(2, totalEdges, 0, 0);
 
                 cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
@@ -1716,7 +1664,6 @@ private:
     }
 
     void takeSnapshot() {
-        // 1. Record the copy commands
         const vk::CommandBufferAllocateInfo allocInfo{
             .commandPool = *commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
         };
@@ -1736,11 +1683,9 @@ private:
 
         cmd.end();
 
-        // 2. Submit and wait for the GPU to finish copying
-        queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &(*cmd)}, nullptr);
+        queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*cmd}, nullptr);
         queue.waitIdle();
 
-        // 3. Map the memory and copy it into our C++ vectors
         const void *mappedCars = carReadbackMemory.mapMemory(0, sizeof(GPU_Car) * totalCars);
         std::memcpy(cpuCars.data(), mappedCars, sizeof(GPU_Car) * totalCars);
         carReadbackMemory.unmapMemory();
@@ -1762,39 +1707,38 @@ private:
         double totalSpeed = 0.;
 
         for (const auto &car: cpuCars) {
-            if (car.state == CarState::Driving || car.state == CarState::Queuing) {
-                ++statRoad;
-                totalSpeed += car.speed;
-            } else if (car.state == CarState::Evacuated) {
-                ++statEvacuated;
-            } else if (car.state == CarState::Garage) {
-                ++statGarage;
-            } else if (car.state == CarState::Stuck) {
-                ++statStuck;
-            } else if (car.state == CarState::Disabled) {
-                ++statDisabled;
+            switch (car.state) {
+                case CarState::Driving:
+                case CarState::Queuing:
+                    ++statRoad;
+                    totalSpeed += car.speed;
+                    break;
+                case CarState::Evacuated:
+                    ++statEvacuated;
+                    break;
+                case CarState::Garage:
+                    ++statGarage;
+                    break;
+                case CarState::Stuck:
+                    ++statStuck;
+                    break;
+                case CarState::Disabled:
+                    ++statDisabled;
+                    break;
             }
         }
         statAvgSpeed = statRoad > 0 ? static_cast<float>(totalSpeed / statRoad) : 0.f;
     }
 
-    // Converts raw GLFW window pixels into Vienna World Coordinates (Meters)
-    void screenToWorld(const double screenX, const double screenY, float &outWorldX, float &outWorldY) const {
-        // 1. Convert Screen Pixels to Normalized Device Coordinates (NDC: -1. to 1.)
-        float ndcX = static_cast<float>(screenX) / static_cast<float>(swapchainExtent.width) * 2.f - 1.f;
-        // Vulkan's Y axis points down, but our world map points up, so we invert Y
+    [[nodiscard]] std::pair<float, float> screenToWorld(const double screenX, const double screenY) const {
+        const float ndcX = mapBounds.aspect_ratio * (
+                               static_cast<float>(screenX) / static_cast<float>(swapchainExtent.width) * 2.f - 1.f);
         const float ndcY = -(static_cast<float>(screenY) / static_cast<float>(swapchainExtent.height) * 2.f - 1.f);
 
-        // 2. Reverse the Aspect Ratio correction
-        ndcX *= mapBounds.aspect_ratio;
+        const float localX = ndcX * (mapBounds.extent_height * 0.5f) / mapBounds.zoom_level;
+        const float localY = ndcY * (mapBounds.extent_height * 0.5f) / mapBounds.zoom_level;
 
-        // 3. Reverse the Zoom and Extent scaling
-        const float localX = (ndcX * (mapBounds.extent_height * 0.5f)) / mapBounds.zoom_level;
-        const float localY = (ndcY * (mapBounds.extent_height * 0.5f)) / mapBounds.zoom_level;
-
-        // 4. Reverse the Camera Pan
-        outWorldX = localX + mapBounds.camera_x;
-        outWorldY = localY + mapBounds.camera_y;
+        return {localX + mapBounds.camera_x, localY + mapBounds.camera_y};
     }
 
     [[nodiscard]] float worldDistanceToPixels(const float distanceMeters) const {
@@ -1803,17 +1747,17 @@ private:
     }
 
     void selectClosestCar(const float worldX, const float worldY) {
+        // no snapshot
         if (cpuCars.empty()) {
-            return; // Must take a snapshot first!
+            return;
         }
 
         std::int32_t closestCarId = -1;
-        float closestDistSq = std::numeric_limits<float>::max();
+        float closestDist = std::numeric_limits<float>::max();
 
         for (std::size_t i = 0; i < cpuCars.size(); ++i) {
             const GPU_Car &car = cpuCars[i];
 
-            // Only select cars that are actually on the road
             if (car.state == CarState::Evacuated || car.state == CarState::Garage) {
                 continue;
             }
@@ -1822,26 +1766,22 @@ private:
             const GPU_Node &startNode = cpuNodes[edge.start_node_idx];
             const GPU_Node &endNode = cpuNodes[edge.end_node_idx];
 
-            // Interpolate car's world position along the edge
             const float t = edge.length > 0.f ? car.position / edge.length : 0.f;
-            const float carWorldX = startNode.x + t * (endNode.x - startNode.x);
-            const float carWorldY = startNode.y + t * (endNode.y - startNode.y);
+            const float carWorldX = std::lerp(startNode.x, endNode.x, t);
+            const float carWorldY = std::lerp(startNode.y, endNode.y, t);
 
-            // Calculate distance squared to the mouse click
             const float dx = carWorldX - worldX;
             const float dy = carWorldY - worldY;
-            const float distSq = dx * dx + dy * dy;
+            const float dist = std::hypot(dx, dy);
 
-            // Find the absolute closest car
-            if (distSq < closestDistSq) {
-                closestDistSq = distSq;
+            if (dist < closestDist) {
+                closestDist = dist;
                 closestCarId = static_cast<std::int32_t>(i);
             }
         }
 
-        // If we clicked reasonably close to a car (e.g., within 20 meters), select it!
-        constexpr float thresholdDegrees = 20.f / 111300.f;
-        if (closestCarId != -1 && closestDistSq < thresholdDegrees * thresholdDegrees) {
+        constexpr float thresholdDegrees = 20.f / 111300.f; // 20 meters
+        if (closestCarId != -1 && closestDist < thresholdDegrees) {
             selectedCarId = closestCarId;
             std::println("Selected Car ID: {}", selectedCarId);
         }
@@ -1852,34 +1792,30 @@ private:
             return;
         }
 
-        float startWorldX = 0.f;
-        float startWorldY = 0.f;
-        float currentWorldX = 0.f;
-        float currentWorldY = 0.f;
-        screenToWorld(startMouseX, startMouseY, startWorldX, startWorldY);
-        screenToWorld(currentMouseX, currentMouseY, currentWorldX, currentWorldY);
+        const auto [startWorldX, startWorldY] = screenToWorld(startMouseX, startMouseY);
+        const auto [currentWorldX, currentWorldY] = screenToWorld(currentMouseX, currentMouseY);
 
         const double dragDistX = std::abs(startMouseX - currentMouseX);
         const double dragDistY = std::abs(startMouseY - currentMouseY);
 
         if (dragDistX < 4. && dragDistY < 4.) {
             std::int32_t closestExitIdx = -1;
-            float closestDistSq = std::numeric_limits<float>::max();
+            float closestDist = std::numeric_limits<float>::max();
 
             for (std::size_t i = 0; i < allExitNodes.size(); ++i) {
                 const float ex = cpuNodes[allExitNodes[i]].x;
                 const float ey = cpuNodes[allExitNodes[i]].y;
                 const float dx = ex - startWorldX;
                 const float dy = ey - startWorldY;
-                const float distSq = dx * dx + dy * dy;
-                if (distSq < closestDistSq) {
-                    closestDistSq = distSq;
+                const float dist = std::hypot(dx, dy);
+                if (dist < closestDist) {
+                    closestDist = dist;
                     closestExitIdx = static_cast<std::int32_t>(i);
                 }
             }
 
-            constexpr float thresholdDegrees = 50.f / 111300.f;
-            if (closestExitIdx != -1 && closestDistSq < thresholdDegrees * thresholdDegrees) {
+            constexpr float thresholdDegrees = 50.f / 111300.f; // 50 meters
+            if (closestExitIdx != -1 && closestDist < thresholdDegrees) {
                 isExitOpen[closestExitIdx] = !isExitOpen[closestExitIdx];
                 triggerDynamicReroute();
             }
@@ -1925,7 +1861,7 @@ private:
                     std::int32_t endNode = cpuEdges[car.current_edge_idx].end_node_idx;
                     if (auto it = std::ranges::find(allExitNodes, endNode); it != allExitNodes.end()) {
                         const std::size_t exitIdx = std::distance(allExitNodes.begin(), it);
-                        currentEvacCount[exitIdx]++;
+                        ++currentEvacCount[exitIdx];
                     }
                 }
             }

@@ -23,8 +23,8 @@ void main(uint3 threadId: SV_DispatchThreadID) {
 
   const int edge_idx = cars[id].current_edge_idx;
 
-  // Atomically insert this car at the head of the street's linked list
-  int original_head;
+  // atomically insert this car at the head of the street's linked list
+  int original_head = -1;
   InterlockedExchange(edges[edge_idx].head_car_idx, (int)id, original_head);
 
   cars[id].next_car_idx = original_head;
