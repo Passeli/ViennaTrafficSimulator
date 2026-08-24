@@ -5,6 +5,7 @@
 #include <GLFW/glfw3.h>
 #include <vector>
 #include <span>
+#include <optional>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -13,15 +14,17 @@
 #include <memory>
 #include <iostream>
 #include <algorithm>
+#include <cmath>
 #include <queue>
 #include <chrono>
 #include <unordered_set>
 #include <nlohmann/json.hpp>
 
 #include "common.hpp"
+#include "cpu_engine.hpp"
 
 template<typename T>
-std::vector<T> loadBinaryData(const std::string_view filepath) {
+static std::vector<T> loadBinaryData(const std::string_view filepath) {
     std::ifstream file{std::string{filepath}, std::ios::binary | std::ios::ate};
 
     if (!file.is_open()) {
@@ -47,6 +50,11 @@ public:
     std::string vulkanEdgesPath = "vulkan_edges.bin";
     std::string vulkanCarsPath = "vulkan_cars.bin";
     bool isHeadless = false;
+    bool useGpu = true;
+    std::uint32_t cpuThreads = 0;
+    float maxSimulationTime = 0.f;
+    std::chrono::time_point<std::chrono::high_resolution_clock> benchmarkStartTime;
+    std::optional<CPUEngine> cpuEngine;
     std::string outputFilePath = "results.json";
     std::vector<std::int32_t> configClosedExits;
 
@@ -71,6 +79,15 @@ public:
             if (data.contains("headless")) {
                 isHeadless = data["headless"].get<bool>();
             }
+            if (data.contains("use_gpu")) {
+                useGpu = data["use_gpu"].get<bool>();
+            }
+            if (data.contains("cpu_threads")) {
+                cpuThreads = data["cpu_threads"].get<std::uint32_t>();
+            }
+            if (data.contains("max_simulation_time")) {
+                maxSimulationTime = data["max_simulation_time"].get<float>();
+            }
             if (data.contains("output_file")) {
                 outputFilePath = data["output_file"].get<std::string>();
             }
@@ -89,6 +106,11 @@ public:
     }
 
     void run() {
+        if (!useGpu) {
+            cpuEngine.emplace(cpuThreads);
+            std::println("Initialized CPU Engine with {} worker threads.", cpuEngine->getNumThreads());
+        }
+
         if (!isHeadless) {
             initWindow();
         }
@@ -223,9 +245,9 @@ private:
     std::int32_t lastEvacuatedCount = 0;
 
     struct IncomingEdge {
-        std::int32_t source_node = 0;
-        std::int32_t edge_idx = 0;
-        float travel_time = 0.f;
+        std::int32_t sourceNode = 0;
+        std::int32_t edgeIdx = 0;
+        float travelTime = 0.f;
     };
 
     std::vector<std::vector<IncomingEdge> > reverseGraph;
@@ -286,23 +308,23 @@ private:
             }
 
             for (const auto &incoming: reverseGraph[current_node]) {
-                float travel_time = incoming.travel_time;
+                float travelTime = incoming.travelTime;
                 if (!cpuCars.empty()) {
-                    if (edge_has_stuck[incoming.edge_idx]) {
-                        travel_time = 1e6f;
+                    if (edge_has_stuck[incoming.edgeIdx]) {
+                        travelTime = 1e6f;
                     } else {
-                        const float capacity = std::max(cpuEdges[incoming.edge_idx].length / 5.f, 1.f);
-                        const float congestion = static_cast<float>(edge_car_counts[incoming.edge_idx]) / capacity;
+                        const float capacity = std::max(cpuEdges[incoming.edgeIdx].length / 5.f, 1.f);
+                        const float congestion = static_cast<float>(edge_car_counts[incoming.edgeIdx]) / capacity;
                         // BPR (Bureau of Public Roads) congestion function
-                        travel_time = incoming.travel_time * (1.f + 4.f * std::pow(congestion, 4.f));
+                        travelTime = incoming.travelTime * (1.f + 4.f * std::pow(congestion, 4.f));
                     }
                 }
-                const float new_time = current_time + travel_time;
+                const float new_time = current_time + travelTime;
 
-                if (new_time < min_travel_time[incoming.source_node]) {
-                    min_travel_time[incoming.source_node] = new_time;
-                    next_node_to_exit[incoming.source_node] = current_node;
-                    pq.emplace(new_time, incoming.source_node);
+                if (new_time < min_travel_time[incoming.sourceNode]) {
+                    min_travel_time[incoming.sourceNode] = new_time;
+                    next_node_to_exit[incoming.sourceNode] = current_node;
+                    pq.emplace(new_time, incoming.sourceNode);
                 }
             }
         }
@@ -792,9 +814,9 @@ private:
             const float travel_time = edge.length / std::max(edge.max_speed, 0.1f);
 
             reverseGraph[edge.end_node_idx].push_back({
-                .source_node = edge.start_node_idx,
-                .edge_idx = i,
-                .travel_time = travel_time
+                .sourceNode = edge.start_node_idx,
+                .edgeIdx = i,
+                .travelTime = travel_time
             });
             forwardGraph[edge.start_node_idx].push_back(i);
         }
@@ -1186,6 +1208,8 @@ private:
             hasStarted = true;
         }
 
+        benchmarkStartTime = std::chrono::high_resolution_clock::now();
+
         while (true) {
             if (!isHeadless) {
                 glfwPollEvents();
@@ -1195,6 +1219,10 @@ private:
             } else {
                 if (simTime > 0.f && statRoad == 0) {
                     std::println("Simulation finished: no cars on the road or all cars on the road stuck.");
+                    break;
+                }
+                if (maxSimulationTime > 0.f && simTime >= maxSimulationTime) {
+                    std::println("Simulation finished: reached max_simulation_time of {:.1f}s.", maxSimulationTime);
                     break;
                 }
             }
@@ -1208,7 +1236,7 @@ private:
                 takeSnapshot();
                 recalculateGPS();
 
-                {
+                if (useGpu) {
                     const vk::DeviceSize bufferSize = sizeof(GPU_Edge) * totalEdges;
                     const auto [stagingBuffer, stagingMemory] = createBuffer(
                         bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
@@ -1469,8 +1497,15 @@ private:
 
             std::int32_t stepsToRun = 0;
             if (isHeadless) {
-                const float timeToNextSnapshot = 60.f - (simTime - lastSnapshotSimTime);
-                stepsToRun = std::clamp(static_cast<std::int32_t>(timeToNextSnapshot / 0.1f), 1, 600);
+                float timeToNextSnapshot = 60.f - (simTime - lastSnapshotSimTime);
+                if (maxSimulationTime > 0.f) {
+                    const float timeToMax = maxSimulationTime - simTime;
+                    timeToNextSnapshot = std::min(timeToNextSnapshot, timeToMax);
+                }
+                stepsToRun = std::clamp(static_cast<std::int32_t>(std::lround(timeToNextSnapshot * 10.f)), 0, 600);
+                if (stepsToRun == 0 && maxSimulationTime > 0.f && simTime >= maxSimulationTime) {
+                    break;
+                }
             } else {
                 if (!isPaused) {
                     const double capped_dt = std::min(dt_real, 0.033);
@@ -1488,47 +1523,69 @@ private:
 
             if (stepsToRun > 0) {
                 simTime += static_cast<float>(stepsToRun) * 0.1f;
-                cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *computePipelineLayout, 0,
-                                       {*computeDescriptorSets[0]}, nullptr);
-                const PushConstants pushData{.dt = 0.1f, .num_cars = totalCars, .num_edges = totalEdges};
-                cmd.pushConstants<PushConstants>(*computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
-                                                 pushData);
 
-                for (std::int32_t step = 0; step < stepsToRun; ++step) {
-                    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *clearEdgesPipeline);
-                    cmd.dispatch((totalEdges + 255) / 256, 1, 1);
+                if (!useGpu) {
+                    for (std::int32_t step = 0; step < stepsToRun; ++step) {
+                        cpuEngine->step(cpuNodes, cpuEdges, cpuCars, 0.1f);
+                    }
 
-                    const vk::BufferMemoryBarrier edgeBarrier{
-                        .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
-                        .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                        .buffer = *edgeBuffer, .offset = 0, .size = vk::WholeSize
-                    };
-                    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
-                                        vk::PipelineStageFlagBits::eComputeShader, {}, nullptr, edgeBarrier, nullptr);
+                    if (!isHeadless) {
+                        const vk::DeviceSize bufferSize = sizeof(GPU_Car) * totalCars;
+                        const auto [stagingBuffer, stagingMemory] = createBuffer(
+                            bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent
+                        );
+                        void *mappedData = stagingMemory.mapMemory(0, bufferSize);
+                        std::memcpy(mappedData, cpuCars.data(), bufferSize);
+                        stagingMemory.unmapMemory();
+                        copyBuffer(stagingBuffer, carBuffer, bufferSize);
+                    }
+                } else {
+                    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *computePipelineLayout, 0,
+                                           {*computeDescriptorSets[0]}, nullptr);
+                    const PushConstants pushData{.dt = 0.1f, .num_cars = totalCars, .num_edges = totalEdges};
+                    cmd.pushConstants<PushConstants>(*computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
+                                                     pushData);
 
-                    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *buildGridPipeline);
-                    cmd.dispatch((totalCars + 255) / 256, 1, 1);
+                    for (std::int32_t step = 0; step < stepsToRun; ++step) {
+                        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *clearEdgesPipeline);
+                        cmd.dispatch((totalEdges + 255) / 256, 1, 1);
 
-                    const vk::BufferMemoryBarrier carBarrier{
-                        .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
-                        .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
-                        .buffer = *carBuffer, .offset = 0, .size = vk::WholeSize
-                    };
-                    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
-                                        vk::PipelineStageFlagBits::eComputeShader, {}, nullptr, carBarrier, nullptr);
+                        const vk::BufferMemoryBarrier edgeBarrier{
+                            .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+                            .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
+                            .buffer = *edgeBuffer, .offset = 0, .size = vk::WholeSize
+                        };
+                        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                                            vk::PipelineStageFlagBits::eComputeShader, {}, nullptr, edgeBarrier,
+                                            nullptr);
 
-                    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *physicsPipeline);
-                    cmd.dispatch((totalCars + 255) / 256, 1, 1);
+                        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *buildGridPipeline);
+                        cmd.dispatch((totalCars + 255) / 256, 1, 1);
 
-                    const vk::PipelineStageFlags dstStage = isHeadless || step < stepsToRun - 1
-                                                                ? vk::PipelineStageFlagBits::eComputeShader
-                                                                : vk::PipelineStageFlagBits::eVertexShader;
-                    constexpr vk::MemoryBarrier stepBarrier{
-                        .srcAccessMask = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead,
-                        .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite
-                    };
-                    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, dstStage, {}, stepBarrier, nullptr,
-                                        nullptr);
+                        const vk::BufferMemoryBarrier carBarrier{
+                            .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
+                            .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
+                            .buffer = *carBuffer, .offset = 0, .size = vk::WholeSize
+                        };
+                        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+                                            vk::PipelineStageFlagBits::eComputeShader, {}, nullptr, carBarrier,
+                                            nullptr);
+
+                        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *physicsPipeline);
+                        cmd.dispatch((totalCars + 255) / 256, 1, 1);
+
+                        const vk::PipelineStageFlags dstStage = isHeadless || step < stepsToRun - 1
+                                                                    ? vk::PipelineStageFlagBits::eComputeShader
+                                                                    : vk::PipelineStageFlagBits::eVertexShader;
+                        constexpr vk::MemoryBarrier stepBarrier{
+                            .srcAccessMask = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead,
+                            .dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite
+                        };
+                        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, dstStage, {}, stepBarrier,
+                                            nullptr,
+                                            nullptr);
+                    }
                 }
 
                 if (!isHeadless) {
@@ -1660,43 +1717,49 @@ private:
             }
         }
         device.waitIdle();
+        takeSnapshot();
+        if (statEvacuated != lastEvacuatedCount || statRoad == 0) {
+            recordPeriodicHistory();
+        }
         saveResults();
     }
 
     void takeSnapshot() {
-        const vk::CommandBufferAllocateInfo allocInfo{
-            .commandPool = *commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
-        };
-        const vk::raii::CommandBuffers cmdBuffers{device, allocInfo};
-        const vk::raii::CommandBuffer &cmd = cmdBuffers.front();
+        if (useGpu) {
+            const vk::CommandBufferAllocateInfo allocInfo{
+                .commandPool = *commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1
+            };
+            const vk::raii::CommandBuffers cmdBuffers{device, allocInfo};
+            const vk::raii::CommandBuffer &cmd = cmdBuffers.front();
 
-        cmd.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+            cmd.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
-        const vk::BufferCopy carCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Car) * totalCars};
-        cmd.copyBuffer(*carBuffer, *carReadbackBuffer, carCopy);
+            const vk::BufferCopy carCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Car) * totalCars};
+            cmd.copyBuffer(*carBuffer, *carReadbackBuffer, carCopy);
 
-        const vk::BufferCopy edgeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Edge) * totalEdges};
-        cmd.copyBuffer(*edgeBuffer, *edgeReadbackBuffer, edgeCopy);
+            const vk::BufferCopy edgeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Edge) * totalEdges};
+            cmd.copyBuffer(*edgeBuffer, *edgeReadbackBuffer, edgeCopy);
 
-        const vk::BufferCopy nodeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Node) * cpuNodes.size()};
-        cmd.copyBuffer(*nodeBuffer, *nodeReadbackBuffer, nodeCopy);
+            const vk::BufferCopy nodeCopy{.srcOffset = 0, .dstOffset = 0, .size = sizeof(GPU_Node) * cpuNodes.size()};
+            cmd.copyBuffer(*nodeBuffer, *nodeReadbackBuffer, nodeCopy);
 
-        cmd.end();
+            cmd.end();
 
-        queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*cmd}, nullptr);
-        queue.waitIdle();
+            queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*cmd}, nullptr);
+            queue.waitIdle();
 
-        const void *mappedCars = carReadbackMemory.mapMemory(0, sizeof(GPU_Car) * totalCars);
-        std::memcpy(cpuCars.data(), mappedCars, sizeof(GPU_Car) * totalCars);
-        carReadbackMemory.unmapMemory();
+            const void *mappedCars = carReadbackMemory.mapMemory(0, sizeof(GPU_Car) * totalCars);
+            std::memcpy(cpuCars.data(), mappedCars, sizeof(GPU_Car) * totalCars);
+            carReadbackMemory.unmapMemory();
 
-        const void *mappedEdges = edgeReadbackMemory.mapMemory(0, sizeof(GPU_Edge) * totalEdges);
-        std::memcpy(cpuEdges.data(), mappedEdges, sizeof(GPU_Edge) * totalEdges);
-        edgeReadbackMemory.unmapMemory();
+            const void *mappedEdges = edgeReadbackMemory.mapMemory(0, sizeof(GPU_Edge) * totalEdges);
+            std::memcpy(cpuEdges.data(), mappedEdges, sizeof(GPU_Edge) * totalEdges);
+            edgeReadbackMemory.unmapMemory();
 
-        const void *mappedNodes = nodeReadbackMemory.mapMemory(0, sizeof(GPU_Node) * cpuNodes.size());
-        std::memcpy(cpuNodes.data(), mappedNodes, sizeof(GPU_Node) * cpuNodes.size());
-        nodeReadbackMemory.unmapMemory();
+            const void *mappedNodes = nodeReadbackMemory.mapMemory(0, sizeof(GPU_Node) * cpuNodes.size());
+            std::memcpy(cpuNodes.data(), mappedNodes, sizeof(GPU_Node) * cpuNodes.size());
+            nodeReadbackMemory.unmapMemory();
+        }
 
         statGarage = 0;
         statRoad = 0;
@@ -1878,12 +1941,29 @@ private:
 
     void saveResults() {
         nlohmann::json results;
+        results["use_gpu"] = useGpu;
+        if (!useGpu && cpuEngine) {
+            results["cpu_threads"] = cpuEngine->getNumThreads();
+        }
         results["vulkan_nodes_path"] = vulkanNodesPath;
         results["vulkan_edges_path"] = vulkanEdgesPath;
         results["vulkan_cars_path"] = vulkanCarsPath;
         results["participation"] = participation;
         results["total_cars"] = totalCars;
         results["simulation_time_seconds"] = simTime;
+
+        const auto benchmarkEndTime = std::chrono::high_resolution_clock::now();
+        const double wallTimeSec = std::chrono::duration<double>(benchmarkEndTime - benchmarkStartTime).count();
+        const double totalSteps = static_cast<double>(simTime) * 10.;
+        results["benchmark"]["wall_clock_time_seconds"] = wallTimeSec;
+        results["benchmark"]["simulated_time_seconds"] = simTime;
+        results["benchmark"]["real_time_factor"] = wallTimeSec > 0.
+                                                       ? static_cast<double>(simTime) / wallTimeSec
+                                                       : 0.;
+        results["benchmark"]["steps_simulated"] = static_cast<std::int64_t>(totalSteps);
+        results["benchmark"]["mean_step_time_ms"] = totalSteps > 0. && wallTimeSec > 0.
+                                                        ? wallTimeSec * 1000. / totalSteps
+                                                        : 0.;
 
 
         results["history"]["flowrate_cars_per_min"] = flowrateHistory;

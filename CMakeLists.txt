@@ -51,7 +51,7 @@ target_include_directories(imgui PUBLIC
 )
 target_link_libraries(imgui PUBLIC glfw)
 
-add_executable(BA main.cpp)
+add_executable(BA main.cpp cpu_engine.hpp)
 
 target_link_libraries(BA PRIVATE
         Vulkan::Vulkan

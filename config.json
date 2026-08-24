@@ -3,6 +3,8 @@
     "vulkan_edges_path": "vulkan_edges.bin",
     "vulkan_cars_path": "vulkan_cars.bin",
     "headless": false,
+    "use_gpu": true,
+    "cpu_threads": 0,
     "output_file": "results.json",
     "participation": 1.00,
     "closed_exits": []
