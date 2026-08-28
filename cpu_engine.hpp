@@ -82,7 +82,7 @@ public:
 
         std::unique_lock lock{queueMutex};
         cvDone.wait(lock, [this] {
-            return this->activeTasks == 0 && this->tasks.empty();
+            return activeTasks == 0 && tasks.empty();
         });
     }
 
