@@ -172,6 +172,14 @@ private:
     vk::raii::DescriptorPool descriptorPool = nullptr;
     vk::raii::DescriptorPool imguiPool = nullptr;
     std::vector<vk::raii::DescriptorSet> computeDescriptorSets;
+    vk::raii::QueryPool timestampQueryPool = nullptr;
+    bool hasTimestampQueries = true;
+    double gpuClearMs = 0.0;
+    double gpuGridMs = 0.0;
+    double gpuPhysMs = 0.0;
+    double gpuBarrMs = 0.0;
+    double gpuTotalMs = 0.0;
+    bool printedGpuTimestamps = false;
 
     std::uint32_t totalCars = 0;
     std::uint32_t totalEdges = 0;
@@ -232,7 +240,7 @@ private:
     std::int32_t statDisabled = 0;
     float statAvgSpeed = 0.f;
     float simTime = 0.f;
-    double participation = 1.0;
+    double participation = 1.;
     bool hasStarted = false;
 
     std::vector<std::int32_t> flowrateHistory;
@@ -636,6 +644,12 @@ private:
             .queueFamilyIndex = queueFamilyIndex
         };
         commandPool = vk::raii::CommandPool{device, poolInfo};
+
+        const vk::QueryPoolCreateInfo queryPoolInfo{
+            .queryType = vk::QueryType::eTimestamp,
+            .queryCount = 16
+        };
+        timestampQueryPool = vk::raii::QueryPool{device, queryPoolInfo};
     }
 
     [[nodiscard]] std::uint32_t findMemoryType(const std::uint32_t typeFilter,
@@ -715,7 +729,7 @@ private:
         std::vector cars_spawned_per_edge(cpuEdges.size(), 0);
         std::vector target_per_edge(cpuEdges.size(), 0);
 
-        double fractional_cars = 0.0;
+        double fractional_cars = 0.;
         for (std::size_t i = 0; i < cpuEdges.size(); ++i) {
             const double ideal_cars = static_cast<double>(cpuEdges[i].spawn_capacity) * participation;
             fractional_cars += ideal_cars;
@@ -1379,6 +1393,15 @@ private:
                 ImGui::Text("Safely Evacuated: %d", statEvacuated);
                 ImGui::Text("Stuck Cars: %d", statStuck);
                 ImGui::Text("City Average Speed: %.1f km/h", statAvgSpeed * 3.6f);
+                if (useGpu && gpuTotalMs > 0.0) {
+                    ImGui::Spacing();
+                    ImGui::Text("--- GPU HARDWARE PROFILING ---");
+                    ImGui::Text("Step Compute: %.3f ms (%.1f RTF)", gpuTotalMs, 100.0 / gpuTotalMs);
+                    ImGui::Text("  Clear Edges:  %.3f ms (%.1f%%)", gpuClearMs, (gpuClearMs / gpuTotalMs) * 100.0);
+                    ImGui::Text("  Build Grid:   %.3f ms (%.1f%%)", gpuGridMs, (gpuGridMs / gpuTotalMs) * 100.0);
+                    ImGui::Text("  Physics IDM:  %.3f ms (%.1f%%)", gpuPhysMs, (gpuPhysMs / gpuTotalMs) * 100.0);
+                    ImGui::Text("  Barriers/Sync:%.3f ms (%.1f%%)", gpuBarrMs, (gpuBarrMs / gpuTotalMs) * 100.0);
+                }
 
                 std::int32_t participatingCars = static_cast<std::int32_t>(totalCars) - statDisabled;
                 float progress = participatingCars > 0
@@ -1548,8 +1571,17 @@ private:
                                                      pushData);
 
                     for (std::int32_t step = 0; step < stepsToRun; ++step) {
+                        if (step == 0 && hasTimestampQueries) {
+                            cmd.resetQueryPool(*timestampQueryPool, 0, 8);
+                            cmd.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, *timestampQueryPool, 0);
+                        }
+
                         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *clearEdgesPipeline);
                         cmd.dispatch((totalEdges + 255) / 256, 1, 1);
+
+                        if (step == 0 && hasTimestampQueries) {
+                            cmd.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, *timestampQueryPool, 1);
+                        }
 
                         const vk::BufferMemoryBarrier edgeBarrier{
                             .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
@@ -1560,8 +1592,16 @@ private:
                                             vk::PipelineStageFlagBits::eComputeShader, {}, nullptr, edgeBarrier,
                                             nullptr);
 
+                        if (step == 0 && hasTimestampQueries) {
+                            cmd.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, *timestampQueryPool, 2);
+                        }
+
                         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *buildGridPipeline);
                         cmd.dispatch((totalCars + 255) / 256, 1, 1);
+
+                        if (step == 0 && hasTimestampQueries) {
+                            cmd.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, *timestampQueryPool, 3);
+                        }
 
                         const vk::BufferMemoryBarrier carBarrier{
                             .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
@@ -1572,8 +1612,16 @@ private:
                                             vk::PipelineStageFlagBits::eComputeShader, {}, nullptr, carBarrier,
                                             nullptr);
 
+                        if (step == 0 && hasTimestampQueries) {
+                            cmd.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, *timestampQueryPool, 4);
+                        }
+
                         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, *physicsPipeline);
                         cmd.dispatch((totalCars + 255) / 256, 1, 1);
+
+                        if (step == 0 && hasTimestampQueries) {
+                            cmd.writeTimestamp(vk::PipelineStageFlagBits::eComputeShader, *timestampQueryPool, 5);
+                        }
 
                         const vk::PipelineStageFlags dstStage = isHeadless || step < stepsToRun - 1
                                                                     ? vk::PipelineStageFlagBits::eComputeShader
@@ -1585,6 +1633,10 @@ private:
                         cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, dstStage, {}, stepBarrier,
                                             nullptr,
                                             nullptr);
+
+                        if (step == 0 && hasTimestampQueries) {
+                            cmd.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, *timestampQueryPool, 6);
+                        }
                     }
                 }
 
@@ -1714,6 +1766,38 @@ private:
                     recreateSwapchain();
                 }
                 queue.waitIdle();
+            }
+
+            if (useGpu && hasTimestampQueries) {
+                std::array<std::uint64_t, 8> timestamps{};
+                const auto res = (*device).getQueryPoolResults(*timestampQueryPool, 0, 7, sizeof(timestamps),
+                                                             timestamps.data(), sizeof(std::uint64_t),
+                                                             vk::QueryResultFlagBits::e64);
+                if (res == vk::Result::eSuccess) {
+                    const float period = physicalDevice.getProperties().limits.timestampPeriod;
+                    gpuClearMs = static_cast<double>(timestamps[1] - timestamps[0]) * period * 1e-6;
+                    const double edge_barr_ms = static_cast<double>(timestamps[2] - timestamps[1]) * period * 1e-6;
+                    gpuGridMs = static_cast<double>(timestamps[3] - timestamps[2]) * period * 1e-6;
+                    const double car_barr_ms = static_cast<double>(timestamps[4] - timestamps[3]) * period * 1e-6;
+                    gpuPhysMs = static_cast<double>(timestamps[5] - timestamps[4]) * period * 1e-6;
+                    const double step_barr_ms = static_cast<double>(timestamps[6] - timestamps[5]) * period * 1e-6;
+                    gpuBarrMs = edge_barr_ms + car_barr_ms + step_barr_ms;
+                    gpuTotalMs = static_cast<double>(timestamps[6] - timestamps[0]) * period * 1e-6;
+
+                    if (!printedGpuTimestamps && simTime >= 60.f) {
+                        std::println("\n=======================================================");
+                        std::println("=== REAL GPU HARDWARE TIMESTAMPS (Peak Active Load) ===");
+                        std::println("=======================================================");
+                        std::println("Edge Reset Pass (clear_edges.slang):      {:.4f} ms ({:.1f}%)", gpuClearMs, (gpuClearMs / gpuTotalMs) * 100.);
+                        std::println("Spatial Grid Pass (build_grid.slang):     {:.4f} ms ({:.1f}%)", gpuGridMs, (gpuGridMs / gpuTotalMs) * 100.);
+                        std::println("Agent IDM Physics Pass (physics.slang):   {:.4f} ms ({:.1f}%)", gpuPhysMs, (gpuPhysMs / gpuTotalMs) * 100.);
+                        std::println("Pipeline Barriers & Memory Sync:          {:.4f} ms ({:.1f}%)", gpuBarrMs, (gpuBarrMs / gpuTotalMs) * 100.);
+                        std::println("-------------------------------------------------------");
+                        std::println("Total Compute Step Hardware Duration:     {:.4f} ms", gpuTotalMs);
+                        std::println("=======================================================\n");
+                        printedGpuTimestamps = true;
+                    }
+                }
             }
         }
         device.waitIdle();
