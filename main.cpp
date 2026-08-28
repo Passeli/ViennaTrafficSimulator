@@ -1788,10 +1788,10 @@ private:
                         std::println("\n=======================================================");
                         std::println("=== REAL GPU HARDWARE TIMESTAMPS (Peak Active Load) ===");
                         std::println("=======================================================");
-                        std::println("Edge Reset Pass (clear_edges.slang):      {:.4f} ms ({:.1f}%)", gpuClearMs, (gpuClearMs / gpuTotalMs) * 100.);
-                        std::println("Spatial Grid Pass (build_grid.slang):     {:.4f} ms ({:.1f}%)", gpuGridMs, (gpuGridMs / gpuTotalMs) * 100.);
-                        std::println("Agent IDM Physics Pass (physics.slang):   {:.4f} ms ({:.1f}%)", gpuPhysMs, (gpuPhysMs / gpuTotalMs) * 100.);
-                        std::println("Pipeline Barriers & Memory Sync:          {:.4f} ms ({:.1f}%)", gpuBarrMs, (gpuBarrMs / gpuTotalMs) * 100.);
+                        std::println("Edge Reset Pass (clear_edges.slang):      {:.4f} ms ({:.1f}%)", gpuClearMs, gpuClearMs / gpuTotalMs * 100.);
+                        std::println("Spatial Grid Pass (build_grid.slang):     {:.4f} ms ({:.1f}%)", gpuGridMs, gpuGridMs / gpuTotalMs * 100.);
+                        std::println("Agent IDM Physics Pass (physics.slang):   {:.4f} ms ({:.1f}%)", gpuPhysMs, gpuPhysMs / gpuTotalMs * 100.);
+                        std::println("Pipeline Barriers & Memory Sync:          {:.4f} ms ({:.1f}%)", gpuBarrMs, gpuBarrMs / gpuTotalMs * 100.);
                         std::println("-------------------------------------------------------");
                         std::println("Total Compute Step Hardware Duration:     {:.4f} ms", gpuTotalMs);
                         std::println("=======================================================\n");
